@@ -16,7 +16,7 @@ Slides are skipped (no title extraction, no rename) when either condition is met
 ## Title override (lines 122–148)
 Before depth-based selection, a pre-scan checks all visible shapes for priority keywords (case-insensitive). First match wins immediately — shape's full text is used as the title as-is, bypassing regex and separator counting entirely.
 
-**Trigger keywords:** "course objective", "table of content", "学习目标", "内容目录"
+**Trigger keywords:** "course objective", "learning outcomes", "table of content", "学习目标", "学习成果", "内容目录"
 
 Override slides get `slideIndices = ""` so they are excluded from numerical index repair (Step 2, Case 2), but still participate in contiguous duplicate suffixing (Step 2, Case 1).
 
@@ -43,6 +43,9 @@ Same `slideTexts` value on consecutive slides → suffix each with `" (1/N)"`, `
 ### 2. Conflicting numerical indices (lines 344–426)
 Same index on adjacent slides → cascade-renumber all subsequent slides at the same structural level (detected by matching the parent prefix).
 - Example: Slides 3–4 both have index `"2.1"` → Slide 4 becomes `"2.2"`, Slide 5 (`"2.2"`) becomes `"2.3"`, etc.
+
+## Notes acronym expansion (lines 472–473, Sub at 679–733)
+Before export, `ExpandAcronymsInNotes` scans each slide's notes for consecutive uppercase words (2+ chars, e.g. `AGV`, `VSFB`) and inserts a space between each character (`A G V`, `V S F B`). Uses regex `[A-Z]{2,}` and processes matches right-to-left to preserve character positions. Slides without notes or without matching patterns are skipped silently.
 
 ## Export & flatten (lines 438–584)
 - Exports each slide as PNG at 2× resolution into `PPT_Temp_Images_Internal\` (deleted after run)

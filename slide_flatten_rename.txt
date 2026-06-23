@@ -128,8 +128,10 @@ Sub Unified_ProcessAndFlattenPresentation()
                         overrideText = LCase(Trim(objShape.TextFrame.TextRange.Text))
                         
                         If InStr(overrideText, "course objective") > 0 Or _
+                           InStr(overrideText, "learning outcomes") > 0 Or _
                            InStr(overrideText, "table of content") > 0 Or _
                            InStr(overrideText, "学习目标") > 0 Or _
+                           InStr(overrideText, "学习成果") > 0 Or _
                            InStr(overrideText, "内容目录") > 0 Then
                             
                             logCheckedShapes(slideNum) = "[" & objShape.Name & "] "
@@ -467,6 +469,9 @@ OverrideApplied:
                     "REMAINING MANUAL CONFLICTS [NON-FIXABLE]: " & unfixableCount & vbCrLf & _
                     "==================================================" & vbCrLf & vbCrLf
 
+    ' Expand acronyms in slide notes (e.g., "AGV" → "A G V")
+    ExpandAcronymsInNotes origPres
+    
     ' ==================================================
     ' STEP 3: HIGH RESOLUTION IMAGE EXPORT TRANSITION
     ' ==================================================
@@ -671,3 +676,58 @@ ErrorHandler:
     MsgBox "An execution interruption occurred. Environment rolled back safely.", vbCritical, "System Failure"
 End Sub
 
+Sub ExpandAcronymsInNotes(ByRef pptPres As Presentation)
+    Dim sld As Slide
+    Dim notesRegex As Object
+    Dim notesMatches As Object
+    Dim notesMatch As Object
+    Dim notesText As String
+    Dim notesShape As Shape
+    
+    Set notesRegex = CreateObject("VBScript.RegExp")
+    With notesRegex
+        .Pattern = "[A-Z]{2,}"
+        .Global = True
+        .IgnoreCase = False
+    End With
+    
+    For Each sld In pptPres.Slides
+        Set notesShape = Nothing
+        On Error Resume Next
+        Set notesShape = sld.NotesPage.Shapes.Placeholders(2)
+        On Error GoTo 0
+        
+        If Not notesShape Is Nothing Then
+            If notesShape.HasTextFrame Then
+                If notesShape.TextFrame.HasText Then
+                    notesText = notesShape.TextFrame.TextRange.Text
+                    
+                    If notesRegex.Test(notesText) Then
+                        Set notesMatches = notesRegex.Execute(notesText)
+                        
+                        Dim matchIdx As Long
+                        For matchIdx = notesMatches.Count - 1 To 0 Step -1
+                            Set notesMatch = notesMatches(matchIdx)
+                            Dim original As String
+                            Dim expanded As String
+                            Dim charPos As Long
+                            
+                            original = notesMatch.Value
+                            expanded = ""
+                            For charPos = 1 To Len(original)
+                                If charPos > 1 Then expanded = expanded & " "
+                                expanded = expanded & Mid(original, charPos, 1)
+                            Next charPos
+                            
+                            notesText = Left(notesText, notesMatch.FirstIndex) & expanded & Mid(notesText, notesMatch.FirstIndex + notesMatch.Length + 1)
+                        Next matchIdx
+                        
+                        notesShape.TextFrame.TextRange.Text = notesText
+                    End If
+                End If
+            End If
+        End If
+    Next sld
+    
+    Set notesRegex = Nothing
+End Sub
