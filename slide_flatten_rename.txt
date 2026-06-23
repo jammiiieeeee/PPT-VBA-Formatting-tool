@@ -23,7 +23,7 @@ Sub Unified_ProcessAndFlattenPresentation()
     
     Dim totalSlides As Long
     Dim currentSlideIndex As Long
-    On Error GoTo 0
+    On Error GoTo ErrorHandler
     
     Set pptApp = PowerPoint.Application
     Set origPres = pptApp.ActivePresentation
@@ -45,7 +45,7 @@ Sub Unified_ProcessAndFlattenPresentation()
     
     On Error Resume Next
     currentSlideIndex = ActiveWindow.View.Slide.SlideIndex
-    On Error GoTo 0
+    On Error GoTo ErrorHandler
     If currentSlideIndex = 0 Then currentSlideIndex = 1
     
     ' Robust Regex: Handles spaces/no-spaces and separators like dots or slashes
@@ -104,8 +104,7 @@ Sub Unified_ProcessAndFlattenPresentation()
                         If InStr(lowerText, "thank you") > 0 Or _
                            InStr(lowerText, "thanks") > 0 Or _
                            InStr(lowerText, "??") > 0 Or _
-                           InStr(lowerText, "q&a") > 0 Or _
-                           InStr(lowerText, "??") > 0 Then
+                           InStr(lowerText, "q&a") > 0 Then
                             skipSlide(slideNum) = True
                         End If
                     End If
@@ -168,7 +167,6 @@ Sub Unified_ProcessAndFlattenPresentation()
                                             remainderStr = Replace(remainderStr, "_", "")
                                             remainderStr = Replace(remainderStr, "/", "")
                                             remainderStr = Replace(remainderStr, "\", "")
-                                            remainderStr = Replace(remainderStr, "?", "")
                                             remainderStr = Replace(remainderStr, "?", "")
                                             
                                             Dim currentDots As Long
@@ -462,6 +460,7 @@ Sub Unified_ProcessAndFlattenPresentation()
             
             If normalizedOriginal <> normalizedFinal Then
                 If sourceShapeNames(slideNum) <> "" Then
+                    Set objShape = Nothing
                     On Error Resume Next
                     Set objShape = sld.Shapes(sourceShapeNames(slideNum))
                     If Not objShape Is Nothing Then
@@ -580,7 +579,7 @@ Sub Unified_ProcessAndFlattenPresentation()
     If FSO.FolderExists(tempFolder) Then
         On Error Resume Next
         FSO.DeleteFolder Left(tempFolder, Len(tempFolder) - 1), True
-        On Error GoTo 0
+        On Error GoTo ErrorHandler
     End If
     
     ' ==================================================
