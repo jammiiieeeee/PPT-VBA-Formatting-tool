@@ -1,5 +1,7 @@
 # AGENTS.md — PPT VBA
 
+> **Do not commit or push changes without explicit user request.**
+
 ## What this is
 Single VBA PowerPoint macro in `slide_flatten_rename.txt`. Entry point: `Sub Unified_ProcessAndFlattenPresentation()`. Paste into VBA editor (Alt+F11) and run.
 
@@ -16,7 +18,7 @@ Slides are skipped (no title extraction, no rename) when either condition is met
 ## Title override (lines 122–148)
 Before depth-based selection, a pre-scan checks all visible shapes for priority keywords (case-insensitive). First match wins immediately — shape's full text is used as the title as-is, bypassing regex and separator counting entirely.
 
-**Trigger keywords:** "course objective", "table of content", "学习目标", "内容目录"
+**Trigger keywords:** "course objective", "learning outcomes", "table of content", "学习目标", "学习成果", "内容目录"
 
 Override slides get `slideIndices = ""` so they are excluded from numerical index repair (Step 2, Case 2), but still participate in contiguous duplicate suffixing (Step 2, Case 1).
 

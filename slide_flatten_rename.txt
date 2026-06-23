@@ -128,8 +128,10 @@ Sub Unified_ProcessAndFlattenPresentation()
                         overrideText = LCase(Trim(objShape.TextFrame.TextRange.Text))
                         
                         If InStr(overrideText, "course objective") > 0 Or _
+                           InStr(overrideText, "learning outcomes") > 0 Or _
                            InStr(overrideText, "table of content") > 0 Or _
                            InStr(overrideText, "学习目标") > 0 Or _
+                           InStr(overrideText, "学习成果") > 0 Or _
                            InStr(overrideText, "内容目录") > 0 Then
                             
                             logCheckedShapes(slideNum) = "[" & objShape.Name & "] "
