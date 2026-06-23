@@ -193,6 +193,7 @@ Sub Unified_ProcessAndFlattenPresentation()
                                             Dim remainderStr As String
                                             remainderStr = currentIndex
                                             remainderStr = Replace(remainderStr, ".", "")
+                                            remainderStr = Replace(remainderStr, "(", "")
                                             remainderStr = Replace(remainderStr, "-", "")
                                             remainderStr = Replace(remainderStr, "_", "")
                                             remainderStr = Replace(remainderStr, "/", "")
@@ -253,9 +254,9 @@ Sub Unified_ProcessAndFlattenPresentation()
                                 testIdx = matches(0).SubMatches(0)
                                 
                                 Dim remStr As String: remStr = testIdx
-                                remStr = Replace(remStr, ".", ""): remStr = Replace(remStr, "-", "")
-                                remStr = Replace(remStr, "_", ""): remStr = Replace(remStr, "/", "")
-                                remStr = Replace(remStr, "\", ""): remStr = Replace(remStr, "?", "")
+                                remStr = Replace(remStr, ".", ""): remStr = Replace(remStr, "(", "")
+                                remStr = Replace(remStr, "-", ""): remStr = Replace(remStr, "_", "")
+                                remStr = Replace(remStr, "/", ""): remStr = Replace(remStr, "\", "")
                                 remStr = Replace(remStr, "?", "")
                                 
                                 If (Len(testIdx) - Len(remStr)) = maxDots Then
@@ -626,7 +627,7 @@ OverrideApplied:
     origPres.Slides(currentSlideIndex).Select
     ActiveWindow.View.GotoSlide currentSlideIndex
     ActiveWindow.View.ZoomToFit = msoTrue
-    On Error GoTo 0
+    On Error GoTo ErrorHandler
     
     Dim wshShell As Object, reportPath As String, fileNum As Integer
     Set wshShell = CreateObject("WScript.Shell")
