@@ -13,7 +13,14 @@ Slides are skipped (no title extraction, no rename) when either condition is met
 1. **Text keywords** — any visible shape on the slide contains "thank you", "thanks", "Q&A", or "??" (lowercased, case-insensitive regex)
 2. **Slide name** — the slide's `.Name` is not `"Slide" & slideNum` AND does not start with `"Slide"`. Catches renamed/imported slides.
 
-## Shape selection algorithm (lines 123–274)
+## Title override (lines 122–148)
+Before depth-based selection, a pre-scan checks all visible shapes for priority keywords (case-insensitive). First match wins immediately — shape's full text is used as the title as-is, bypassing regex and separator counting entirely.
+
+**Trigger keywords:** "course objective", "table of content", "学习目标", "内容目录"
+
+Override slides get `slideIndices = ""` so they are excluded from numerical index repair (Step 2, Case 2), but still participate in contiguous duplicate suffixing (Step 2, Case 1).
+
+## Shape selection algorithm (lines 150–302)
 **Scope:** Only visible shapes with text frames where `Top < SlideHeight × 0.5`.
 
 **Selection:**

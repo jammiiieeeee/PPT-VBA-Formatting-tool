@@ -119,6 +119,34 @@ Sub Unified_ProcessAndFlattenPresentation()
         sourceShapeNames(slideNum) = ""
         originalMatchLength(slideNum) = 0
         
+        ' Override: priority keywords bypass depth-based selection
+        For Each objShape In objSlide.Shapes
+            If objShape.Visible = msoTrue Then
+                If objShape.HasTextFrame Then
+                    If objShape.TextFrame.HasText Then
+                        Dim overrideText As String
+                        overrideText = LCase(Trim(objShape.TextFrame.TextRange.Text))
+                        
+                        If InStr(overrideText, "course objective") > 0 Or _
+                           InStr(overrideText, "table of content") > 0 Or _
+                           InStr(overrideText, "学习目标") > 0 Or _
+                           InStr(overrideText, "内容目录") > 0 Then
+                            
+                            logCheckedShapes(slideNum) = "[" & objShape.Name & "] "
+                            logDiscoveredTexts(slideNum) = "    -> [OVERRIDE TITLE] '" & Trim(Left(objShape.TextFrame.TextRange.Text, 25)) & "...'"
+                            
+                            sourceShapeNames(slideNum) = objShape.Name
+                            originalMatchLength(slideNum) = 0
+                            slideIndices(slideNum) = ""
+                            slideTexts(slideNum) = Trim(objShape.TextFrame.TextRange.Text)
+                            originalTitles(slideNum) = slideTexts(slideNum)
+                            GoTo OverrideApplied
+                        End If
+                    End If
+                End If
+            End If
+        Next objShape
+        
         Dim deepestIndex As String: deepestIndex = ""
         Dim deepestText As String: deepestText = ""
         Dim deepestMatchLen As Long: deepestMatchLen = 0
@@ -274,6 +302,7 @@ Sub Unified_ProcessAndFlattenPresentation()
             slideTexts(slideNum) = ""
         End If
         
+OverrideApplied:
         finalTitles(slideNum) = originalTitles(slideNum)
     Next slideNum
 
