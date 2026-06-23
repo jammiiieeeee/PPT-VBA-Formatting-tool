@@ -201,6 +201,7 @@ Sub Unified_ProcessAndFlattenPresentation()
         ' Process structural finalizations and apply top-most absolute canvas layout overrides
         If deepestIndex <> "" Then
             Dim distinctMatchCount As Long: distinctMatchCount = 0
+            Dim tiedShapeNames As String: tiedShapeNames = ""
             
             For Each objShape In objSlide.Shapes
                 If objShape.Visible = msoTrue And objShape.HasTextFrame Then
@@ -228,7 +229,10 @@ Sub Unified_ProcessAndFlattenPresentation()
                                 remStr = Replace(remStr, "?", "")
                                 
                                 If (Len(testIdx) - Len(remStr)) = maxDots Then
-                                    distinctMatchCount = distinctMatchCount + 1
+                                    If InStr(tiedShapeNames, "|" & objShape.Name & "|") = 0 Then
+                                        tiedShapeNames = tiedShapeNames & "|" & objShape.Name & "|"
+                                        distinctMatchCount = distinctMatchCount + 1
+                                    End If
                                 End If
                             End If
                         Next sIdx
@@ -243,9 +247,11 @@ Sub Unified_ProcessAndFlattenPresentation()
                 
                 For Each objShape In objSlide.Shapes
                     If objShape.Visible = msoTrue Then
-                        If objShape.Top < topmostGlobalPosition Then
-                            topmostGlobalPosition = objShape.Top
-                            topmostGlobalShapeName = objShape.Name
+                        If InStr(tiedShapeNames, "|" & objShape.Name & "|") > 0 Then
+                            If objShape.Top < topmostGlobalPosition Then
+                                topmostGlobalPosition = objShape.Top
+                                topmostGlobalShapeName = objShape.Name
+                            End If
                         End If
                     End If
                 Next objShape

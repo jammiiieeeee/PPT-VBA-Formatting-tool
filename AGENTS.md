@@ -21,7 +21,7 @@ Slides are skipped (no title extraction, no rename) when either condition is met
 2. Test each block against regex: `^(\d+(?:[\.\(/\\\-_\??]\d+)*)\s*(.*)`
 3. Count separator characters (`. ( / \ - _ ?`) in the matched index portion
 4. **Winner = shape with highest separator count** (deepest nesting, e.g. `1.2.3` beats `1.2`)
-5. **Tie-breaker** (lines 242–254): if multiple shapes tie at max separator count, pick the **topmost visible shape on the entire slide** (any shape, even non-text; falls back gracefully via `On Error Resume Next`)
+5. **Tie-breaker** (lines 242–254): if multiple shapes tie at max separator count, pick the **topmost visible shape among the tied shapes** (any shape, even non-text; falls back gracefully via `On Error Resume Next`)
 
 Note: the separator character class allows **mixing** (e.g. `1.2/3` matches). The space between index and title is optional (`\s*`), so `1.2.3Title` also matches.
 
