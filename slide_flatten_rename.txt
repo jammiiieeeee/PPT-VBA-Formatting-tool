@@ -646,23 +646,13 @@ Private Sub RunAllChecks()
             emptyNotesSlides = emptyNotesSlides & slideNum
         End If
 
-        ' Check 9: Language mismatch (notes vs reference language)
+        ' Check 9: Language mismatch (notes vs presentation language)
         If notesTxt <> "" Then
-            Dim refLang As String
-            If mTexts(slideNum) <> "" Then
-                refLang = DetectLanguage(mTexts(slideNum))
-            Else
-                refLang = pptLang
-            End If
             Dim notesLang As String
             notesLang = DetectLanguage(notesTxt)
-            If refLang <> "" And notesLang <> "" And refLang <> "MIXED" And notesLang <> "MIXED" And refLang <> notesLang Then
+            If pptLang <> "" And notesLang <> "" And pptLang <> "MIXED" And notesLang <> "MIXED" And pptLang <> notesLang Then
                 mismatchCount = mismatchCount + 1
-                If mTexts(slideNum) <> "" Then
-                    mismatchLog = mismatchLog & "  Slide " & slideNum & ": Title [" & refLang & "] vs Notes [" & notesLang & "]" & vbCrLf
-                Else
-                    mismatchLog = mismatchLog & "  Slide " & slideNum & ": [pptLang " & refLang & "] vs Notes [" & notesLang & "]" & vbCrLf
-                End If
+                mismatchLog = mismatchLog & "  Slide " & slideNum & ": pptLang [" & pptLang & "] vs Notes [" & notesLang & "]" & vbCrLf
 
                 ' Find problematic sentence(s) with ±2 context
                 Dim sentences() As String, temp As String
@@ -677,7 +667,7 @@ Private Sub RunAllChecks()
                 For si = 0 To UBound(sentences)
                     Dim sLang As String
                     sLang = DetectLanguage(Trim(sentences(si)))
-                    If sLang <> "" And sLang <> refLang Then
+                    If sLang <> "" And sLang <> pptLang Then
                         Dim contextSentences As String: contextSentences = ""
                         Dim ci As Long
                         For ci = IIf(si >= 2, si - 2, 0) To IIf(si + 2 <= UBound(sentences), si + 2, UBound(sentences))
