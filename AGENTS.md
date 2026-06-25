@@ -67,7 +67,7 @@ Note: the separator character class allows **mixing** (e.g. `1.2/3` matches). Th
 | # | Check | What it detects |
 |---|-------|-----------------|
 | 8 | Missing/empty notes | Slide has no `NotesSlide` or notes text is blank |
-| 9 | Notes language mismatch | `DetectLanguage(title)` ≠ `DetectLanguage(notes)` — flagged with ±2 sentence context |
+| 9 | Notes language mismatch | `DetectLanguage(notes)` ≠ reference language (per-slide title if available, else `pptLang`) — flagged with ±2 sentence context |
 
 ### Translation gap checks
 | # | Check | What it detects |
