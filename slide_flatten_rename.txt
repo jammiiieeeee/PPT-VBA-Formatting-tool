@@ -631,57 +631,17 @@ Private Sub RunAllChecks()
 
     Dim emptyNotesSlides As String: emptyNotesSlides = ""
     Dim emptyNotesCount As Long: emptyNotesCount = 0
-    Dim mismatchCount As Long: mismatchCount = 0
-    Dim mismatchLog As String: mismatchLog = ""
 
     For slideNum = 1 To mTotalSlides
         Set sld = origPres.Slides(slideNum)
         Dim notesTxt As String
         notesTxt = GetNotesText(sld)
 
-        ' Check 8 & 9: Missing / empty notes
+        ' Check 8: Missing / empty notes
         If notesTxt = "" Then
             emptyNotesCount = emptyNotesCount + 1
             If emptyNotesSlides <> "" Then emptyNotesSlides = emptyNotesSlides & ", "
             emptyNotesSlides = emptyNotesSlides & slideNum
-        End If
-
-        ' Check 9: Language mismatch (notes vs presentation language)
-        If notesTxt <> "" Then
-            Dim notesLang As String
-            notesLang = DetectLanguage(notesTxt)
-            If pptLang <> "" And notesLang <> "" And pptLang <> "MIXED" And notesLang <> "MIXED" And pptLang <> notesLang Then
-                mismatchCount = mismatchCount + 1
-                mismatchLog = mismatchLog & "  Slide " & slideNum & ": pptLang [" & pptLang & "] vs Notes [" & notesLang & "]" & vbCrLf
-
-                ' Find problematic sentence(s) with ±2 context
-                Dim sentences() As String, temp As String
-                temp = Replace(notesTxt, "!", ".")
-                temp = Replace(temp, "?", ".")
-                temp = Replace(temp, "。", ".")
-                temp = Replace(temp, "！", ".")
-                temp = Replace(temp, "？", ".")
-                sentences = Split(temp, ".")
-
-                Dim si As Long
-                For si = 0 To UBound(sentences)
-                    Dim sLang As String
-                    sLang = DetectLanguage(Trim(sentences(si)))
-                    If sLang <> "" And sLang <> pptLang Then
-                        Dim contextSentences As String: contextSentences = ""
-                        Dim ci As Long
-                        For ci = IIf(si >= 2, si - 2, 0) To IIf(si + 2 <= UBound(sentences), si + 2, UBound(sentences))
-                            If ci = si Then
-                                contextSentences = contextSentences & " >>>" & Trim(sentences(ci)) & "<<<. "
-                            Else
-                                contextSentences = contextSentences & Trim(sentences(ci)) & ". "
-                            End If
-                        Next ci
-                        mismatchLog = mismatchLog & "    Context: '" & Trim(Left(contextSentences, 200)) & "'" & vbCrLf
-                        Exit For
-                    End If
-                Next si
-            End If
         End If
     Next slideNum
 
@@ -737,12 +697,6 @@ Private Sub RunAllChecks()
         notesLog = notesLog & "--- END EMPTY NOTES DEBUG ---" & vbCrLf & vbCrLf
     End If
 
-    If mismatchCount > 0 Then
-        notesLog = notesLog & "Language mismatches (title vs notes): " & mismatchCount & vbCrLf & mismatchLog & vbCrLf
-    Else
-        notesLog = notesLog & "No language mismatches found." & vbCrLf & vbCrLf
-    End If
-
     ' ===================================================================
     ' PHASE 4: TRANSLATION GAP CHECK (notes + visible text)
     ' ===================================================================
@@ -754,13 +708,12 @@ Private Sub RunAllChecks()
     Dim transGapLog As String: transGapLog = ""
 
     For slideNum = 1 To mTotalSlides
+        Set sld = origPres.Slides(slideNum)
+        Dim slideGapLog As String: slideGapLog = ""
+        Dim hasGap As Boolean: hasGap = False
+
+        ' --- Visible text shape scan (non-skipped slides only) ---
         If Not mSkip(slideNum) Then
-            Set sld = origPres.Slides(slideNum)
-
-            Dim slideGapLog As String: slideGapLog = ""
-            Dim hasGap As Boolean: hasGap = False
-
-            ' --- Visible text shape scan (full slide, all visible text shapes) ---
             Dim visGapLog As String, visSlideGaps As Long
             visGapLog = ""
             visSlideGaps = 0
@@ -806,57 +759,53 @@ Private Sub RunAllChecks()
                 End If
 SkipVisShape:
             Next objShape
-            If visSlideGaps > 0 Then visGapSlides = visGapSlides + 1
-
-            ' --- Notes sentence check ---
-            If mTexts(slideNum) <> "" Then
-                Dim notesForTrans As String
-                notesForTrans = GetNotesText(sld)
-                If notesForTrans <> "" Then
-                    Dim nTemp As String
-                    nTemp = Replace(notesForTrans, "!", ".")
-                    nTemp = Replace(nTemp, "?", ".")
-                    nTemp = Replace(nTemp, "。", ".")
-                    nTemp = Replace(nTemp, "！", ".")
-                    nTemp = Replace(nTemp, "？", ".")
-
-                    Dim noteSentences() As String
-                    noteSentences = Split(nTemp, ".")
-                    Dim nsi As Long
-                    For nsi = 0 To UBound(noteSentences)
-                        Dim noteSent As String
-                        noteSent = Trim(noteSentences(nsi))
-                        If Len(noteSent) > 0 Then
-                            Dim noteSentLang As String
-                            noteSentLang = DetectLanguage(noteSent)
-                            If noteSentLang <> "" And noteSentLang <> pptLang Then
-                                notesGapCount = notesGapCount + 1
-                                hasGap = True
-                                Dim contextN As String: contextN = ""
-                                Dim nci As Long
-                                For nci = IIf(nsi >= 2, nsi - 2, 0) To IIf(nsi + 2 <= UBound(noteSentences), nsi + 2, UBound(noteSentences))
-                                    If nci = nsi Then
-                                        contextN = contextN & " >>>" & Trim(noteSentences(nci)) & "<<<. "
-                                    Else
-                                        contextN = contextN & Trim(noteSentences(nci)) & ". "
-                                    End If
-                                Next nci
-                                slideGapLog = slideGapLog & "      NOTES Sentence " & (nsi + 1) & ": '" & Trim(Left(noteSent, 60)) & "' [" & noteSentLang & "]" & vbCrLf & _
-                                              "        Context: '" & Trim(Left(contextN, 200)) & "'" & vbCrLf
-                            End If
-                        End If
-                    Next nsi
-                End If
-            End If
-
-            ' Combine visible-text and notes gap logs
             If visSlideGaps > 0 Then
-                slideGapLog = "      (Visible text: " & visSlideGaps & " shape(s))" & vbCrLf & visGapLog & slideGapLog
+                visGapSlides = visGapSlides + 1
+                slideGapLog = slideGapLog & "      (Visible text: " & visSlideGaps & " shape(s))" & vbCrLf & visGapLog
             End If
+        End If
 
-            If hasGap Then
-                transGapLog = transGapLog & "  SLIDE " & slideNum & " (Title: '" & mOrigTitles(slideNum) & "')" & vbCrLf & slideGapLog
-            End If
+        ' --- Notes sentence check (all slides) ---
+        Dim notesForTrans As String
+        notesForTrans = GetNotesText(sld)
+        If notesForTrans <> "" Then
+            Dim nTemp As String
+            nTemp = Replace(notesForTrans, "!", ".")
+            nTemp = Replace(nTemp, "?", ".")
+            nTemp = Replace(nTemp, "。", ".")
+            nTemp = Replace(nTemp, "！", ".")
+            nTemp = Replace(nTemp, "？", ".")
+
+            Dim noteSentences() As String
+            noteSentences = Split(nTemp, ".")
+            Dim nsi As Long
+            For nsi = 0 To UBound(noteSentences)
+                Dim noteSent As String
+                noteSent = Trim(noteSentences(nsi))
+                If Len(noteSent) > 0 Then
+                    Dim noteSentLang As String
+                    noteSentLang = DetectLanguage(noteSent)
+                    If noteSentLang <> "" And noteSentLang <> pptLang Then
+                        notesGapCount = notesGapCount + 1
+                        hasGap = True
+                        Dim contextN As String: contextN = ""
+                        Dim nci As Long
+                        For nci = IIf(nsi >= 2, nsi - 2, 0) To IIf(nsi + 2 <= UBound(noteSentences), nsi + 2, UBound(noteSentences))
+                            If nci = nsi Then
+                                contextN = contextN & " >>>" & Trim(noteSentences(nci)) & "<<<. "
+                            Else
+                                contextN = contextN & Trim(noteSentences(nci)) & ". "
+                            End If
+                        Next nci
+                        slideGapLog = slideGapLog & "      NOTES Sentence " & (nsi + 1) & ": '" & Trim(Left(noteSent, 60)) & "' [" & noteSentLang & "]" & vbCrLf & _
+                                      "        Context: '" & Trim(Left(contextN, 200)) & "'" & vbCrLf
+                    End If
+                End If
+            Next nsi
+        End If
+
+        If hasGap Then
+            transGapLog = transGapLog & "  SLIDE " & slideNum & " (Title: '" & mOrigTitles(slideNum) & "')" & vbCrLf & slideGapLog
         End If
     Next slideNum
 
@@ -969,7 +918,6 @@ SkipVisShape:
     reportSummary = reportSummary & "--- NOTES ---" & vbCrLf
     reportSummary = reportSummary & "  Slides with notes: " & totalWithNotes & vbCrLf
     reportSummary = reportSummary & "  Empty notes:       " & emptyNotesCount & vbCrLf
-    reportSummary = reportSummary & "  Language mismatches: " & mismatchCount & vbCrLf
     reportSummary = reportSummary & vbCrLf
     reportSummary = reportSummary & "--- TRANSLATION GAPS ---" & vbCrLf
     reportSummary = reportSummary & "  Shapes checked:   " & visShapesChecked & vbCrLf
@@ -991,7 +939,6 @@ SkipVisShape:
     If fixableCount > 0 Then msg = msg & "Title issues (fixable): " & fixableCount & vbCrLf
     If unfixableCount > 0 Then msg = msg & "Title issues (needs manual fix): " & unfixableCount & vbCrLf
     If emptyNotesCount > 0 Then msg = msg & "Slides with no notes: " & emptyNotesCount & vbCrLf
-    If mismatchCount > 0 Then msg = msg & "Language mismatches: " & mismatchCount & vbCrLf
     If shapeGapCount > 0 Then msg = msg & "Shape text gaps: " & shapeGapCount & vbCrLf
     If notesGapCount > 0 Then msg = msg & "Notes gaps: " & notesGapCount & vbCrLf
     msg = msg & vbCrLf & "Presentation language: " & pptLang
