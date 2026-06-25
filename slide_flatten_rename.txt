@@ -26,6 +26,18 @@ Private mTotalSlides As Long
 Private mSldWidth As Single
 Private mSldHeight As Single
 
+Private Type TitleResult
+    Index As String
+    Text As String
+    OrigTitle As String
+    ShapeName As String
+    MatchLength As Long
+    Skip As Boolean
+    SkipReason As String
+    CheckedShapes As String
+    DiscoveredTexts As String
+End Type
+
 ' ===================================================================
 ' ENTRY POINTS  — these appear in Alt+F8
 ' ===================================================================
@@ -49,8 +61,7 @@ Private Sub PopulateTitleArrays(ByRef origPres As Presentation, _
 
     Dim sldWidth As Single, sldHeight As Single, totalSlides As Long
     Dim regex As Object
-    Dim slideNum As Long, objSlide As Slide, objShape As Shape
-    Dim matches As Object
+    Dim slideNum As Long, objSlide As Slide
 
     sldWidth = origPres.PageSetup.SlideWidth
     sldHeight = origPres.PageSetup.SlideHeight
@@ -83,240 +94,260 @@ Private Sub PopulateTitleArrays(ByRef origPres As Presentation, _
 
     For slideNum = 1 To totalSlides
         Set objSlide = origPres.Slides(slideNum)
-        mSkip(slideNum) = False
-        mSkipReason(slideNum) = ""
+        Dim result As TitleResult
+        result = ExtractSlideTitle(objSlide, sldHeight, regex, slideNum, captureDebug)
+
+        mSkip(slideNum) = result.Skip
+        mSkipReason(slideNum) = result.SkipReason
+        mShapeNames(slideNum) = result.ShapeName
+        mMatchLength(slideNum) = result.MatchLength
+        mIndices(slideNum) = result.Index
+        mTexts(slideNum) = result.Text
+        mOrigTitles(slideNum) = result.OrigTitle
+        mFinalTitles(slideNum) = result.OrigTitle
 
         If captureDebug Then
-            mCheckedShapes(slideNum) = ""
-            mDiscoveredTexts(slideNum) = ""
+            mCheckedShapes(slideNum) = result.CheckedShapes
+            mDiscoveredTexts(slideNum) = result.DiscoveredTexts
         End If
-
-        ' Guardrail 1: Keyword match
-        For Each objShape In objSlide.Shapes
-            If objShape.Visible = msoTrue Then
-                If objShape.HasTextFrame Then
-                    If objShape.TextFrame.HasText Then
-                        Dim lowerText As String
-                        lowerText = LCase(Trim(objShape.TextFrame.TextRange.Text))
-                        If InStr(lowerText, "thank you") > 0 Or _
-                           InStr(lowerText, "thanks") > 0 Or _
-                           InStr(lowerText, "??") > 0 Or _
-                           InStr(lowerText, "q&a") > 0 Then
-                            If Not mSkip(slideNum) Then mSkipReason(slideNum) = "Keyword match"
-                            mSkip(slideNum) = True
-                        End If
-                    End If
-                End If
-            End If
-        Next objShape
-
-        ' Guardrail 2: Non-standard slide name
-        If objSlide.Name <> "Slide" & slideNum And Left(objSlide.Name, 5) <> "Slide" Then
-            If Not mSkip(slideNum) Then mSkipReason(slideNum) = "Non-standard slide name"
-            mSkip(slideNum) = True
-        End If
-
-        mShapeNames(slideNum) = ""
-        mMatchLength(slideNum) = 0
-
-        ' Override: priority keywords bypass depth-based selection
-        For Each objShape In objSlide.Shapes
-            If objShape.Visible = msoTrue Then
-                If objShape.HasTextFrame Then
-                    If objShape.TextFrame.HasText Then
-                        Dim overrideText As String
-                        overrideText = LCase(Trim(objShape.TextFrame.TextRange.Text))
-                        If InStr(overrideText, "course objective") > 0 Or _
-                           InStr(overrideText, "learning outcomes") > 0 Or _
-                           InStr(overrideText, "table of content") > 0 Or _
-                            InStr(overrideText, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H76EE) & ChrW(&H6807)) > 0 Or _
-                            InStr(overrideText, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6210) & ChrW(&H679C)) > 0 Or _
-                            InStr(overrideText, ChrW(&H5185) & ChrW(&H5BB9) & ChrW(&H76EE) & ChrW(&H5F55)) > 0 Or _
-                            InStr(overrideText, ChrW(&H57F9) & ChrW(&H8BAD) & ChrW(&H76EE) & ChrW(&H6807)) > 0 Or _
-                            InStr(overrideText, ChrW(&H76EE) & ChrW(&H5F55)) > 0 Or _
-                            InStr(overrideText, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6536) & ChrW(&H83B7)) > 0 Then
-
-                            If captureDebug Then
-                                mCheckedShapes(slideNum) = "[" & objShape.Name & "] "
-                                mDiscoveredTexts(slideNum) = "    -> [OVERRIDE TITLE] '" & Trim(Left(objShape.TextFrame.TextRange.Text, 25)) & "...'"
-                            End If
-
-                            mShapeNames(slideNum) = objShape.Name
-                            mMatchLength(slideNum) = 0
-                            mIndices(slideNum) = ""
-                            mTexts(slideNum) = Trim(objShape.TextFrame.TextRange.Text)
-                            mOrigTitles(slideNum) = mTexts(slideNum)
-                            GoTo TitleExtracted
-                        End If
-                    End If
-                End If
-            End If
-        Next objShape
-
-        ' Depth-based title selection
-        Dim deepestIndex As String: deepestIndex = ""
-        Dim deepestText As String: deepestText = ""
-        Dim deepestMatchLen As Long: deepestMatchLen = 0
-        Dim deepestShapeName As String: deepestShapeName = ""
-        Dim maxDots As Long: maxDots = -1
-
-        For Each objShape In objSlide.Shapes
-            If objShape.Visible = msoTrue Then
-                If captureDebug Then
-                    mCheckedShapes(slideNum) = mCheckedShapes(slideNum) & "[" & objShape.Name & "] "
-                End If
-
-                If objShape.HasTextFrame Then
-                    If objShape.TextFrame.HasText Then
-                        Dim fullText As String
-                        fullText = objShape.TextFrame.TextRange.Text
-                        fullText = Replace(fullText, vbCrLf, vbCr)
-                        fullText = Replace(fullText, vbLf, vbCr)
-
-                        Dim textBlocks() As String
-                        textBlocks = Split(fullText, vbCr)
-
-                        Dim blockIdx As Long
-                        For blockIdx = 0 To UBound(textBlocks)
-                            Dim currentBlockText As String
-                            currentBlockText = Trim(textBlocks(blockIdx))
-
-                            If Len(currentBlockText) > 0 Then
-                                Dim croppedTxt As String: croppedTxt = Left(currentBlockText, 25)
-
-                                If objShape.Top < (sldHeight * 0.5) Then
-                                    If regex.Test(currentBlockText) Then
-                                        Set matches = regex.Execute(currentBlockText)
-                                        Dim matchObj As Object
-                                        For Each matchObj In matches
-                                            Dim currentIndex As String, currentText As String
-                                            currentIndex = matchObj.SubMatches(0)
-                                            currentText = matchObj.SubMatches(1)
-
-                                            Dim remainderStr As String
-                                            remainderStr = currentIndex
-                                            remainderStr = Replace(remainderStr, ".", "")
-                                            remainderStr = Replace(remainderStr, "(", "")
-                                            remainderStr = Replace(remainderStr, "-", "")
-                                            remainderStr = Replace(remainderStr, "_", "")
-                                            remainderStr = Replace(remainderStr, "/", "")
-                                            remainderStr = Replace(remainderStr, "\", "")
-                                            remainderStr = Replace(remainderStr, "?", "")
-
-                                            Dim currentDots As Long
-                                            currentDots = Len(currentIndex) - Len(remainderStr)
-
-                                            If captureDebug Then
-                                                mDiscoveredTexts(slideNum) = mDiscoveredTexts(slideNum) & _
-                                                    vbCrLf & "    -> [MATCHED BLOCK] '" & croppedTxt & "...' (Shape: " & objShape.Name & ", Index: '" & currentIndex & "', Separators: " & currentDots & ", Top: " & Round(objShape.Top, 1) & ")"
-                                            End If
-
-                                            If currentDots > maxDots Then
-                                                maxDots = currentDots
-                                                deepestIndex = currentIndex
-                                                deepestText = currentText
-                                                deepestMatchLen = matchObj.Length
-                                                deepestShapeName = objShape.Name
-                                            End If
-                                        Next matchObj
-                                    Else
-                                        If captureDebug Then
-                                            mDiscoveredTexts(slideNum) = mDiscoveredTexts(slideNum) & _
-                                                vbCrLf & "    -> [REJECTED BY REGEX] '" & croppedTxt & "...' (Shape: " & objShape.Name & ")"
-                                        End If
-                                    End If
-                                Else
-                                    If captureDebug Then
-                                        mDiscoveredTexts(slideNum) = mDiscoveredTexts(slideNum) & _
-                                            vbCrLf & "    -> [REJECTED BY HEIGHT GATE] '" & croppedTxt & "...' (Shape: " & objShape.Name & ", Top: " & Round(objShape.Top, 1) & ")"
-                                    End If
-                                End If
-                            End If
-                        Next blockIdx
-                    End If
-                End If
-            End If
-        Next objShape
-
-        ' Tie-breaker detection
-        If deepestIndex <> "" Then
-            Dim distinctMatchCount As Long: distinctMatchCount = 0
-            Dim tiedShapeNames As String: tiedShapeNames = ""
-
-            For Each objShape In objSlide.Shapes
-                If objShape.Visible = msoTrue And objShape.HasTextFrame Then
-                    If objShape.TextFrame.HasText And objShape.Top < (sldHeight * 0.5) Then
-                        Dim scanText As String
-                        scanText = objShape.TextFrame.TextRange.Text
-                        scanText = Replace(scanText, vbCrLf, vbCr)
-                        scanText = Replace(scanText, vbLf, vbCr)
-
-                        Dim scanBlocks() As String
-                        scanBlocks = Split(scanText, vbCr)
-
-                        Dim sIdx As Long
-                        For sIdx = 0 To UBound(scanBlocks)
-                            Dim checkBlock As String: checkBlock = Trim(scanBlocks(sIdx))
-                            If regex.Test(checkBlock) Then
-                                Set matches = regex.Execute(checkBlock)
-                                Dim testIdx As String
-                                testIdx = matches(0).SubMatches(0)
-
-                                Dim remStr As String: remStr = testIdx
-                                remStr = Replace(remStr, ".", ""): remStr = Replace(remStr, "(", "")
-                                remStr = Replace(remStr, "-", ""): remStr = Replace(remStr, "_", "")
-                                remStr = Replace(remStr, "/", ""): remStr = Replace(remStr, "\", "")
-                                remStr = Replace(remStr, "?", "")
-
-                                If (Len(testIdx) - Len(remStr)) = maxDots Then
-                                    If InStr(tiedShapeNames, "|" & objShape.Name & "|") = 0 Then
-                                        tiedShapeNames = tiedShapeNames & "|" & objShape.Name & "|"
-                                        distinctMatchCount = distinctMatchCount + 1
-                                    End If
-                                End If
-                            End If
-                        Next sIdx
-                    End If
-                End If
-            Next objShape
-
-            If distinctMatchCount > 1 Then
-                If Not mSkip(slideNum) Then
-                    mSkip(slideNum) = True
-                    mSkipReason(slideNum) = "Multiple shapes tie at separator depth " & maxDots
-                End If
-                mIndices(slideNum) = ""
-                mTexts(slideNum) = ""
-                mShapeNames(slideNum) = ""
-                mMatchLength(slideNum) = 0
-                mOrigTitles(slideNum) = ""
-                GoTo TitleExtracted
-            End If
-
-            mIndices(slideNum) = deepestIndex
-            mTexts(slideNum) = Trim(deepestText)
-            mShapeNames(slideNum) = deepestShapeName
-            mMatchLength(slideNum) = deepestMatchLen
-
-            If Len(mTexts(slideNum)) > 0 Then
-                mOrigTitles(slideNum) = deepestIndex & " " & mTexts(slideNum)
-            Else
-                mOrigTitles(slideNum) = deepestIndex
-            End If
-        Else
-            If Not mSkip(slideNum) Then
-                mSkip(slideNum) = True
-                mSkipReason(slideNum) = "No valid title candidate found"
-            End If
-            mOrigTitles(slideNum) = ""
-            mIndices(slideNum) = ""
-            mTexts(slideNum) = ""
-        End If
-
-TitleExtracted:
-        mFinalTitles(slideNum) = mOrigTitles(slideNum)
     Next slideNum
 End Sub
+
+' ===================================================================
+' SHARED: CountSeparators
+' Counts separator characters (. ( / \ - _ ?) in an index string.
+' ===================================================================
+
+Private Function CountSeparators(ByVal s As String) As Long
+    Dim r As String: r = s
+    r = Replace(r, ".", "")
+    r = Replace(r, "(", "")
+    r = Replace(r, "-", "")
+    r = Replace(r, "_", "")
+    r = Replace(r, "/", "")
+    r = Replace(r, "\", "")
+    r = Replace(r, "?", "")
+    CountSeparators = Len(s) - Len(r)
+End Function
+
+' ===================================================================
+' SHARED: ExtractSlideTitle
+' Returns TitleResult for one slide: guardrails, override, depth
+' selection, tie-breaker, and no-match fallback.
+' ===================================================================
+
+Private Function ExtractSlideTitle(ByVal sld As Slide, ByVal sldHeight As Single, _
+                                   ByVal regex As Object, ByVal slideNum As Long, _
+                                   Optional ByVal captureDebug As Boolean = False) As TitleResult
+
+    Dim result As TitleResult
+    Dim objShape As Shape
+
+    result.Skip = False
+    result.SkipReason = ""
+    result.ShapeName = ""
+    result.MatchLength = 0
+    result.CheckedShapes = ""
+    result.DiscoveredTexts = ""
+
+    ' Guardrail 1: Keyword match
+    For Each objShape In sld.Shapes
+        If objShape.Visible = msoTrue And objShape.HasTextFrame And objShape.TextFrame.HasText Then
+            Dim lowerText As String
+            lowerText = LCase(Trim(objShape.TextFrame.TextRange.Text))
+            If InStr(lowerText, "thank you") > 0 Or _
+               InStr(lowerText, "thanks") > 0 Or _
+               InStr(lowerText, "??") > 0 Or _
+               InStr(lowerText, "q&a") > 0 Then
+                result.Skip = True
+                result.SkipReason = "Keyword match"
+                ExtractSlideTitle = result
+                Exit Function
+            End If
+        End If
+    Next objShape
+
+    ' Guardrail 2: Non-standard slide name
+    If sld.Name <> "Slide" & slideNum And Left(sld.Name, 5) <> "Slide" Then
+        result.Skip = True
+        result.SkipReason = "Non-standard slide name"
+        ExtractSlideTitle = result
+        Exit Function
+    End If
+
+    ' Override: priority keywords bypass depth-based selection
+    For Each objShape In sld.Shapes
+        If objShape.Visible = msoTrue And objShape.HasTextFrame And objShape.TextFrame.HasText Then
+            Dim overrideText As String
+            overrideText = LCase(Trim(objShape.TextFrame.TextRange.Text))
+            If InStr(overrideText, "course objective") > 0 Or _
+               InStr(overrideText, "learning outcomes") > 0 Or _
+               InStr(overrideText, "table of content") > 0 Or _
+                InStr(overrideText, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H76EE) & ChrW(&H6807)) > 0 Or _
+                InStr(overrideText, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6210) & ChrW(&H679C)) > 0 Or _
+                InStr(overrideText, ChrW(&H5185) & ChrW(&H5BB9) & ChrW(&H76EE) & ChrW(&H5F55)) > 0 Or _
+                InStr(overrideText, ChrW(&H57F9) & ChrW(&H8BAD) & ChrW(&H76EE) & ChrW(&H6807)) > 0 Or _
+                InStr(overrideText, ChrW(&H76EE) & ChrW(&H5F55)) > 0 Or _
+                InStr(overrideText, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6536) & ChrW(&H83B7)) > 0 Then
+
+                If captureDebug Then
+                    result.CheckedShapes = "[" & objShape.Name & "] "
+                    result.DiscoveredTexts = "    -> [OVERRIDE TITLE] '" & Trim(Left(objShape.TextFrame.TextRange.Text, 25)) & "...'"
+                End If
+
+                result.ShapeName = objShape.Name
+                result.MatchLength = 0
+                result.Index = ""
+                result.Text = Trim(objShape.TextFrame.TextRange.Text)
+                result.OrigTitle = result.Text
+                ExtractSlideTitle = result
+                Exit Function
+            End If
+        End If
+    Next objShape
+
+    ' Depth-based title selection
+    Dim deepestIndex As String: deepestIndex = ""
+    Dim deepestText As String: deepestText = ""
+    Dim deepestMatchLen As Long: deepestMatchLen = 0
+    Dim deepestShapeName As String: deepestShapeName = ""
+    Dim maxDots As Long: maxDots = -1
+    Dim matches As Object
+
+    For Each objShape In sld.Shapes
+        If objShape.Visible = msoTrue Then
+            If captureDebug Then
+                result.CheckedShapes = result.CheckedShapes & "[" & objShape.Name & "] "
+            End If
+
+            If objShape.HasTextFrame And objShape.TextFrame.HasText Then
+                Dim fullText As String
+                fullText = objShape.TextFrame.TextRange.Text
+                fullText = Replace(fullText, vbCrLf, vbCr)
+                fullText = Replace(fullText, vbLf, vbCr)
+
+                Dim textBlocks() As String
+                textBlocks = Split(fullText, vbCr)
+
+                Dim blockIdx As Long
+                For blockIdx = 0 To UBound(textBlocks)
+                    Dim currentBlockText As String
+                    currentBlockText = Trim(textBlocks(blockIdx))
+
+                    If Len(currentBlockText) > 0 Then
+                        Dim croppedTxt As String: croppedTxt = Left(currentBlockText, 25)
+
+                        If objShape.Top < (sldHeight * 0.5) Then
+                            If regex.Test(currentBlockText) Then
+                                Set matches = regex.Execute(currentBlockText)
+                                Dim matchObj As Object
+                                For Each matchObj In matches
+                                    Dim currentIndex As String, currentText As String
+                                    currentIndex = matchObj.SubMatches(0)
+                                    currentText = matchObj.SubMatches(1)
+
+                                    Dim currentDots As Long
+                                    currentDots = CountSeparators(currentIndex)
+
+                                    If captureDebug Then
+                                        result.DiscoveredTexts = result.DiscoveredTexts & _
+                                            vbCrLf & "    -> [MATCHED BLOCK] '" & croppedTxt & "...' (Shape: " & objShape.Name & ", Index: '" & currentIndex & "', Separators: " & currentDots & ", Top: " & Round(objShape.Top, 1) & ")"
+                                    End If
+
+                                    If currentDots > maxDots Then
+                                        maxDots = currentDots
+                                        deepestIndex = currentIndex
+                                        deepestText = currentText
+                                        deepestMatchLen = matchObj.Length
+                                        deepestShapeName = objShape.Name
+                                    End If
+                                Next matchObj
+                            Else
+                                If captureDebug Then
+                                    result.DiscoveredTexts = result.DiscoveredTexts & _
+                                        vbCrLf & "    -> [REJECTED BY REGEX] '" & croppedTxt & "...' (Shape: " & objShape.Name & ")"
+                                End If
+                            End If
+                        Else
+                            If captureDebug Then
+                                result.DiscoveredTexts = result.DiscoveredTexts & _
+                                    vbCrLf & "    -> [REJECTED BY HEIGHT GATE] '" & croppedTxt & "...' (Shape: " & objShape.Name & ", Top: " & Round(objShape.Top, 1) & ")"
+                            End If
+                        End If
+                    End If
+                Next blockIdx
+            End If
+        End If
+    Next objShape
+
+    ' Tie-breaker detection
+    If deepestIndex <> "" Then
+        Dim distinctMatchCount As Long: distinctMatchCount = 0
+        Dim tiedShapeNames As String: tiedShapeNames = ""
+
+        For Each objShape In sld.Shapes
+            If objShape.Visible = msoTrue And objShape.HasTextFrame Then
+                If objShape.TextFrame.HasText And objShape.Top < (sldHeight * 0.5) Then
+                    Dim scanText As String
+                    scanText = objShape.TextFrame.TextRange.Text
+                    scanText = Replace(scanText, vbCrLf, vbCr)
+                    scanText = Replace(scanText, vbLf, vbCr)
+
+                    Dim scanBlocks() As String
+                    scanBlocks = Split(scanText, vbCr)
+
+                    Dim sIdx As Long
+                    For sIdx = 0 To UBound(scanBlocks)
+                        Dim checkBlock As String: checkBlock = Trim(scanBlocks(sIdx))
+                        If regex.Test(checkBlock) Then
+                            Set matches = regex.Execute(checkBlock)
+                            Dim testIdx As String
+                            testIdx = matches(0).SubMatches(0)
+
+                            If CountSeparators(testIdx) = maxDots Then
+                                If InStr(tiedShapeNames, "|" & objShape.Name & "|") = 0 Then
+                                    tiedShapeNames = tiedShapeNames & "|" & objShape.Name & "|"
+                                    distinctMatchCount = distinctMatchCount + 1
+                                End If
+                            End If
+                        End If
+                    Next sIdx
+                End If
+            End If
+        Next objShape
+
+        If distinctMatchCount > 1 Then
+            result.Skip = True
+            result.SkipReason = "Multiple shapes tie at separator depth " & maxDots
+            result.Index = ""
+            result.Text = ""
+            result.ShapeName = ""
+            result.MatchLength = 0
+            result.OrigTitle = ""
+            ExtractSlideTitle = result
+            Exit Function
+        End If
+
+        result.Index = deepestIndex
+        result.Text = Trim(deepestText)
+        result.ShapeName = deepestShapeName
+        result.MatchLength = deepestMatchLen
+
+        If Len(result.Text) > 0 Then
+            result.OrigTitle = deepestIndex & " " & result.Text
+        Else
+            result.OrigTitle = deepestIndex
+        End If
+    Else
+        result.Skip = True
+        result.SkipReason = "No valid title candidate found"
+        result.Index = ""
+        result.Text = ""
+        result.OrigTitle = ""
+    End If
+
+    ExtractSlideTitle = result
+End Function
 
 ' ===================================================================
 ' SHARED: DetectLanguage
