@@ -3,26 +3,41 @@
 > **Do not commit or push changes without explicit user request.**
 
 ## What this is
-Single VBA PowerPoint macro in `slide_flatten_rename.txt`. Entry point: `Sub Unified_ProcessAndFlattenPresentation()`. Paste into VBA editor (Alt+F11) and run.
+
+Single VBA PowerPoint module in `slide_flatten_rename.txt`. Contains two workflows:
+
+| Alt+F8 entry point | What it does |
+|---|---|
+| `PPTTools_CheckSlides` | Inspect all slides for issues — **no changes** to file |
+| `PPTTools_Flatten` | Flatten presentation (assumes checks have passed) |
+
+**Recommended workflow:** run `PPTTools_CheckSlides` → fix any problems → run `PPTTools_Flatten`.
+
+Paste into VBA editor (Alt+F11 → Insert → Module), then Alt+F8 and double-click the macro name.
 
 ## Preconditions
 - Operates on `ActivePresentation` — the presentation open and active when run
-- **Must be saved before running** — script exits with error otherwise
-- Creates `_Flattened.pptx` copy in the same directory (e.g., `Deck.pptx` → `Deck_Flattened.pptx`)
+- **Must be saved before running** — both macros exit with error otherwise
+- `PPTTools_Flatten` creates `_Flattened.pptx` copy in the same directory (e.g., `Deck.pptx` → `Deck_Flattened.pptx`)
 
 ## Skip guardrails
-Slides are skipped (no title extraction, no rename) when either condition is met:
-1. **Text keywords** — any visible shape on the slide contains "thank you", "thanks", "Q&A", or "??" (lowercased, case-insensitive regex)
-2. **Slide name** — the slide's `.Name` is not `"Slide" & slideNum` AND does not start with `"Slide"`. Catches renamed/imported slides.
+Slides are skipped (no title extraction, no flatten, no rename) when any condition is met. All skips are tagged with a `skipReason` string, logged per-slide and grouped in the **SKIPPED SLIDES SUMMARY**. First-matched reason wins (order below):
 
-## Title override (lines 122–150)
+| # | Reason | Trigger |
+|---|--------|---------|
+| 1 | `"Keyword match"` | Any visible shape contains "thank you", "thanks", "Q&A", or "??" (case-insensitive) |
+| 2 | `"Non-standard slide name"` | Slide `.Name` is not `"Slide" & slideNum` AND does not start with `"Slide"` |
+| 3 | `"Multiple shapes tie at separator depth N"` | Two+ shapes have the same highest separator count (tie-breaker) |
+| 4 | `"No valid title candidate found"` | No shape's text matches the regex in the top half of the slide |
+
+## Title override
 Before depth-based selection, a pre-scan checks all visible shapes for priority keywords (case-insensitive). First match wins immediately — shape's full text is used as the title as-is, bypassing regex and separator counting entirely.
 
-**Trigger keywords:** "course objective", "learning outcomes", "table of content", "学习目标", "学习成果", "内容目录"
+**Trigger keywords:** "course objective", "learning outcomes", "table of content", "学习目标", "学习成果", "内容目录", "培训目标", "目录", "学习收获"
 
 Override slides get `slideIndices = ""` so they are excluded from numerical index repair (Step 2, Case 2), but still participate in contiguous duplicate suffixing (Step 2, Case 1).
 
-## Shape selection algorithm (lines 152–306)
+## Shape selection algorithm
 **Scope:** Only visible shapes with text frames where `Top < SlideHeight × 0.5`.
 
 **Selection:**
@@ -30,41 +45,61 @@ Override slides get `slideIndices = ""` so they are excluded from numerical inde
 2. Test each block against regex: `^(\d+(?:[\.\(/\\\-_\??]\d+)*)\s*(.*)`
 3. Count separator characters (`. ( / \ - _ ?`) in the matched index portion
 4. **Winner = shape with highest separator count** (deepest nesting, e.g. `1.2.3` beats `1.2`)
-5. **Tie-breaker** (lines 274–292): if multiple shapes tie at max separator count, pick the **topmost visible shape among the tied shapes** (any shape, even non-text; falls back gracefully via `On Error Resume Next`)
+5. **Tie-breaker**: if multiple shapes tie at max separator count, the slide is **skipped entirely** (not flattened). The skip is tagged with reason `"Multiple shapes tie at separator depth N"`.
+6. **No match**: if no shape's text passes the regex, the slide is **skipped entirely** (tagged `"No valid title candidate found"`).
 
 Note: the separator character class allows **mixing** (e.g. `1.2/3` matches). The space between index and title is optional (`\s*`), so `1.2.3Title` also matches.
 
-## Conflict resolution (lines 313–472)
-Two independent branches, checked in order:
+## PPTTools_CheckSlides — all 11 checks
 
-### 1. Contiguous duplicate titles (lines 323–377)
-Same `slideTexts` value on consecutive slides → suffix each with `" (1/N)"`, `"(2/N)"` etc.
-- Example: Slides 5–6 both have text `"Setup"` → becomes `"Setup (1/2)"`, `"Setup (2/2)"`
-- Non-contiguous duplicates are flagged as non-fixable (manual attention needed)
+### Title/index error analysis
+| # | Check | What it detects |
+|---|-------|-----------------|
+| 1 | Keyword match skip | Guardrail — slide skipped from all checks |
+| 2 | Non-standard slide name | Guardrail — slide skipped from all checks |
+| 3 | Tie-breaker collision | Guardrail — slide skipped from all checks |
+| 4 | No valid title candidate | Guardrail — slide skipped from all checks |
+| 5 | Contiguous duplicate titles | Same title on consecutive slides — flagged fixable |
+| 6 | Non-contiguous duplicate titles | Same title on non-consecutive slides — flagged non-fixable |
+| 7 | Conflicting numerical indices | Same index on adjacent slides — flagged fixable |
 
-### 2. Conflicting numerical indices (lines 380–462)
-Same index on adjacent slides → cascade-renumber all subsequent slides at the same structural level (detected by matching the parent prefix).
-- Example: Slides 3–4 both have index `"2.1"` → Slide 4 becomes `"2.2"`, Slide 5 (`"2.2"`) becomes `"2.3"`, etc.
+### Notes checks
+| # | Check | What it detects |
+|---|-------|-----------------|
+| 8 | Missing/empty notes | Slide has no `NotesSlide` or notes text is blank |
+| 9 | Notes language mismatch | `DetectLanguage(title)` ≠ `DetectLanguage(notes)` — flagged with ±2 sentence context |
 
-## Export & flatten (lines 474–621)
+### Translation gap checks
+| # | Check | What it detects |
+|---|-------|-----------------|
+| 10 | Shape text boxes — missed translation | Any visible shape whose language differs from the presentation-level language |
+| 11 | Notes — missed translation | Any sentence in the notes whose language differs from the presentation-level language |
+
+Language detection uses CJK Unicode range (`\u4E00`–`\u9FFF`) vs Latin letters ratio. Returns `"ZH"`, `"EN"`, or `"MIXED"`.
+
+## PPTTools_Flatten
 - Exports each slide as PNG at 2× resolution into `PPT_Temp_Images_Internal\` (deleted after run)
 - Opens `_Flattened.pptx` copy, deletes all shapes from each slide, inserts PNGs as full-slide backgrounds
 - Injects invisible 1pt white-on-white title text into the native title placeholder (`ppLayoutTitleOnly`)
+- Does NOT run error analysis or notes checks (assumes user fixed issues found by `PPTTools_CheckSlides`)
 
 ## Title vs. slide naming
 Two separate name assignments serving different purposes:
-- **Shape name** (line 572) — names the invisible title placeholder shape per-slide. Per-slide namespace, no collision risk.
-- **Slide name** (line 609) — sets `sld.Name` for PowerPoint slide-sorter and `Slides("name")` lookup. Collision guardrail appends `_2`, `_3` etc. if a duplicate exists.
+- **Shape name** — names the invisible title placeholder shape per-slide. Per-slide namespace, no collision risk.
+- **Slide name** — sets `sld.Name` for PowerPoint slide-sorter and `Slides("name")` lookup. Collision guardrail appends `_2`, `_3` etc. if a duplicate exists.
 
 Both are intentional; see also tooltip/outline/accessibility binding via the native placeholder.
 
 ## Debug log
 - Written to Desktop: `Articulate_Title_Update_Log_yyyymmdd_hhmmss.txt`
 - Timestamped per run — never overwrites previous logs
-- Contains per-slide inspection matrix: all shapes checked, all text blocks evaluated (matched/rejected/height-gated), tie-breaker winner shape, before/after titles
+- **Check log** (`PPTTools_CheckSlides`): contains error analysis log, notes audit, translation gap check, skipped slides summary, and full per-slide debug matrix
+- **Flatten log** (`PPTTools_Flatten`): brief — total slides, flattened count, skipped count
 
-## Error handling (lines 665–674)
-Emergency rollback on any error:
+## Error handling
+**Check workflow** (`RunAllChecks`): simple error trapping — no file changes to roll back.
+
+**Flatten workflow** (`FlattenPresentation`): emergency rollback on any error:
 - Closes `_Flattened.pptx` without saving (`Saved = msoTrue` to suppress prompts)
 - Deletes `PPT_Temp_Images_Internal\` temp folder
 - Shows "System Failure" message box

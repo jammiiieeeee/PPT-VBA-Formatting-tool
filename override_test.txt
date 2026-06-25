@@ -1,0 +1,156 @@
+' ==================================================
+' PPT Override List Diagnostic
+' Scans the active presentation's slides for override
+' keywords and reports which slides would be affected.
+' Does NOT modify the presentation.
+' Paste into VBA editor (Alt+F11 -> Insert -> Module)
+' then Alt+F8 -> run PPTTools_TestOverrideList
+' ==================================================
+
+Option Explicit
+
+Public Sub PPTTools_TestOverrideList()
+    Dim pptApp As PowerPoint.Application
+    Dim pres As Presentation
+    Dim sld As Slide
+    Dim shp As Shape
+    Dim slideNum As Long
+    Dim foundCount As Long
+    Dim logText As String
+    Dim overrideSlides As String
+    Dim detail As String
+    Dim hitShape As String
+    Dim hitKeyword As String
+    Dim hitText As String
+    Dim checkText As String
+    Dim wsh As Object
+    Dim fileNum As Integer
+    Dim logPath As String
+
+    MsgBox "Override test starting...", vbInformation, "Override Test"
+
+    Set pptApp = PowerPoint.Application
+    Set pres = pptApp.ActivePresentation
+
+    If pres.Path = "" Then
+        MsgBox "Please save the presentation first.", vbCritical, "Save Required"
+        Exit Sub
+    End If
+
+    logText = "Override List Diagnostic" & vbCrLf
+    logText = logText & "Presentation: " & pres.Name & vbCrLf
+    logText = logText & "Total slides: " & pres.Slides.Count & vbCrLf
+    logText = logText & "Timestamp: " & Now & vbCrLf & vbCrLf
+
+    foundCount = 0
+    overrideSlides = ""
+    detail = ""
+
+    ' Scan each slide for override keywords
+    For slideNum = 1 To pres.Slides.Count
+        Set sld = pres.Slides(slideNum)
+        hitShape = ""
+        hitKeyword = ""
+        hitText = ""
+
+        For Each shp In sld.Shapes
+            If shp.Visible = msoTrue Then
+                If shp.HasTextFrame Then
+                    If shp.TextFrame.HasText Then
+                        checkText = LCase(Trim(shp.TextFrame.TextRange.Text))
+
+                        If InStr(checkText, "course objective") > 0 Then
+                            hitKeyword = "course objective"
+                        ElseIf InStr(checkText, "learning outcomes") > 0 Then
+                            hitKeyword = "learning outcomes"
+                        ElseIf InStr(checkText, "table of content") > 0 Then
+                            hitKeyword = "table of content"
+                        ElseIf InStr(checkText, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H76EE) & ChrW(&H6807)) > 0 Then ' 学习目标
+                            hitKeyword = ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H76EE) & ChrW(&H6807)
+                        ElseIf InStr(checkText, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6210) & ChrW(&H679C)) > 0 Then ' 学习成果
+                            hitKeyword = ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6210) & ChrW(&H679C)
+                        ElseIf InStr(checkText, ChrW(&H5185) & ChrW(&H5BB9) & ChrW(&H76EE) & ChrW(&H5F55)) > 0 Then ' 内容目录
+                            hitKeyword = ChrW(&H5185) & ChrW(&H5BB9) & ChrW(&H76EE) & ChrW(&H5F55)
+                        ElseIf InStr(checkText, ChrW(&H57F9) & ChrW(&H8BAD) & ChrW(&H76EE) & ChrW(&H6807)) > 0 Then ' 培训目标
+                            hitKeyword = ChrW(&H57F9) & ChrW(&H8BAD) & ChrW(&H76EE) & ChrW(&H6807)
+                        ElseIf InStr(checkText, ChrW(&H76EE) & ChrW(&H5F55)) > 0 Then ' 目录
+                            hitKeyword = ChrW(&H76EE) & ChrW(&H5F55)
+                        ElseIf InStr(checkText, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6536) & ChrW(&H83B7)) > 0 Then ' 学习收获
+                            hitKeyword = ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6536) & ChrW(&H83B7)
+                        End If
+
+                        If hitKeyword <> "" Then
+                            hitShape = shp.Name
+                            hitText = Trim(shp.TextFrame.TextRange.Text)
+                            Exit For
+                        End If
+                    End If
+                End If
+            End If
+        Next shp
+
+        If hitKeyword <> "" Then
+            foundCount = foundCount + 1
+            If overrideSlides <> "" Then overrideSlides = overrideSlides & ", "
+            overrideSlides = overrideSlides & slideNum
+            detail = detail & "Slide " & slideNum & ": keyword=""" & hitKeyword & _
+                     """, shape=""" & hitShape & """, text=""" & Left(hitText, 60) & """" & vbCrLf
+        End If
+    Next slideNum
+
+    logText = logText & "Override hits: " & foundCount & vbCrLf
+    If foundCount > 0 Then
+        logText = logText & "Slides: " & overrideSlides & vbCrLf & vbCrLf
+        logText = logText & detail & vbCrLf
+    Else
+        logText = logText & "(none found)" & vbCrLf & vbCrLf
+    End If
+
+    ' Verification section
+    logText = logText & "--- Keyword logic verification ---" & vbCrLf
+
+    If SimulateOverride("Course Objective") Then logText = logText & "[PASS] EN: Course Objective" & vbCrLf Else logText = logText & "[FAIL] EN: Course Objective" & vbCrLf
+    If SimulateOverride("Learning Outcomes") Then logText = logText & "[PASS] EN: Learning Outcomes" & vbCrLf Else logText = logText & "[FAIL] EN: Learning Outcomes" & vbCrLf
+    If SimulateOverride("Table of Content") Then logText = logText & "[PASS] EN: Table of Content" & vbCrLf Else logText = logText & "[FAIL] EN: Table of Content" & vbCrLf
+    If SimulateOverride("COURSE OBJECTIVE") Then logText = logText & "[PASS] EN: COURSE OBJECTIVE (case)" & vbCrLf Else logText = logText & "[FAIL] EN: COURSE OBJECTIVE (case)" & vbCrLf
+    If SimulateOverride("Learning Outcomes 2024") Then logText = logText & "[PASS] EN: Learning Outcomes 2024" & vbCrLf Else logText = logText & "[FAIL] EN: Learning Outcomes 2024" & vbCrLf
+    If SimulateOverride(ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H76EE) & ChrW(&H6807)) Then logText = logText & "[PASS] ZH: 学习目标" & vbCrLf Else logText = logText & "[FAIL] ZH: 学习目标" & vbCrLf
+    If SimulateOverride(ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6210) & ChrW(&H679C)) Then logText = logText & "[PASS] ZH: 学习成果" & vbCrLf Else logText = logText & "[FAIL] ZH: 学习成果" & vbCrLf
+    If SimulateOverride(ChrW(&H5185) & ChrW(&H5BB9) & ChrW(&H76EE) & ChrW(&H5F55)) Then logText = logText & "[PASS] ZH: 内容目录" & vbCrLf Else logText = logText & "[FAIL] ZH: 内容目录" & vbCrLf
+    If SimulateOverride(ChrW(&H57F9) & ChrW(&H8BAD) & ChrW(&H76EE) & ChrW(&H6807)) Then logText = logText & "[PASS] ZH: 培训目标" & vbCrLf Else logText = logText & "[FAIL] ZH: 培训目标" & vbCrLf
+    If SimulateOverride(ChrW(&H76EE) & ChrW(&H5F55)) Then logText = logText & "[PASS] ZH: 目录" & vbCrLf Else logText = logText & "[FAIL] ZH: 目录" & vbCrLf
+    If SimulateOverride(ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6536) & ChrW(&H83B7)) Then logText = logText & "[PASS] ZH: 学习收获" & vbCrLf Else logText = logText & "[FAIL] ZH: 学习收获" & vbCrLf
+    If Not SimulateOverride("Content Overview") Then logText = logText & "[PASS] NEG: Content Overview (safe)" & vbCrLf Else logText = logText & "[FAIL] NEG: Content Overview (unsafe)" & vbCrLf
+    If Not SimulateOverride("Thanksgiving Dinner") Then logText = logText & "[PASS] NEG: Thanksgiving (safe)" & vbCrLf Else logText = logText & "[FAIL] NEG: Thanksgiving (unsafe)" & vbCrLf
+
+    logText = logText & "--- End ---" & vbCrLf
+
+    ' Write log
+    Set wsh = CreateObject("WScript.Shell")
+    logPath = wsh.SpecialFolders("Desktop") & "\PPT_Override_List_Test_" & Format(Now, "yyyymmdd_hhmmss") & ".txt"
+    Set wsh = Nothing
+    fileNum = FreeFile
+    Open logPath For Output As #fileNum
+    Print #fileNum, logText
+    Close #fileNum
+
+    MsgBox "Override test complete." & vbCrLf & vbCrLf & _
+           "Hits: " & foundCount & " slide(s)" & vbCrLf & _
+           "Log: " & logPath, vbInformation, "Override Test"
+End Sub
+
+' Simulates the override InStr check
+Private Function SimulateOverride(ByVal txt As String) As Boolean
+    Dim lower As String
+    lower = LCase(Trim(txt))
+    If InStr(lower, "course objective") > 0 Then SimulateOverride = True: Exit Function
+    If InStr(lower, "learning outcomes") > 0 Then SimulateOverride = True: Exit Function
+    If InStr(lower, "table of content") > 0 Then SimulateOverride = True: Exit Function
+    If InStr(lower, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H76EE) & ChrW(&H6807)) > 0 Then SimulateOverride = True: Exit Function
+    If InStr(lower, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6210) & ChrW(&H679C)) > 0 Then SimulateOverride = True: Exit Function
+    If InStr(lower, ChrW(&H5185) & ChrW(&H5BB9) & ChrW(&H76EE) & ChrW(&H5F55)) > 0 Then SimulateOverride = True: Exit Function
+    If InStr(lower, ChrW(&H57F9) & ChrW(&H8BAD) & ChrW(&H76EE) & ChrW(&H6807)) > 0 Then SimulateOverride = True: Exit Function
+    If InStr(lower, ChrW(&H76EE) & ChrW(&H5F55)) > 0 Then SimulateOverride = True: Exit Function
+    If InStr(lower, ChrW(&H5B66) & ChrW(&H4E60) & ChrW(&H6536) & ChrW(&H83B7)) > 0 Then SimulateOverride = True: Exit Function
+    SimulateOverride = False
+End Function

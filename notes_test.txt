@@ -1,0 +1,303 @@
+' ==================================================
+' PPT Notes Diagnostic Tool
+' Tests 4 methods for accessing slide notes.
+' Paste into VBA editor (Alt+F11 → Insert → Module)
+' then Alt+F8 → run PPTTools_TestNotes
+' ==================================================
+
+Option Explicit
+
+Public Sub PPTTools_TestNotes()
+    Dim pptApp As PowerPoint.Application
+    Dim pres As Presentation
+    Dim sld As Slide
+    Dim slideNum As Long
+    Dim log As String
+    Dim summaryCounts(1 To 4) As Long
+    Dim emptyNotesCount As Long
+    Dim emptyNotesList As String
+    Dim methodNames As Variant
+    Dim m As Long
+
+    emptyNotesCount = 0
+    emptyNotesList = ""
+    methodNames = Array("HasNotesSlide", "NotesSlide", "NotesPage", "GetNotesText")
+
+    Set pptApp = PowerPoint.Application
+    Set pres = pptApp.ActivePresentation
+
+    If pres.Path = "" Then
+        MsgBox "Please save the presentation first.", vbCritical, "Save Required"
+        Exit Sub
+    End If
+
+    log = "==================================================" & vbCrLf & _
+          "PPT NOTES DIAGNOSTIC" & vbCrLf & _
+          "==================================================" & vbCrLf & _
+          "Presentation: " & pres.Name & vbCrLf & _
+          "Total slides: " & pres.Slides.Count & vbCrLf & _
+          "TIMESTAMP: " & Now & vbCrLf & _
+          "==================================================" & vbCrLf & vbCrLf
+
+    For slideNum = 1 To pres.Slides.Count
+        Set sld = pres.Slides(slideNum)
+
+        log = log & "--- Slide " & slideNum & " (" & sld.Name & ") ---" & vbCrLf
+
+        ' =============================================
+        ' METHOD A: HasNotesSlide
+        ' =============================================
+        log = log & "[A] HasNotesSlide:" & vbCrLf
+        Dim hasNotes As Boolean
+        Dim aErrNum As Long
+        Dim aErrDesc As String
+        On Error Resume Next
+        Err.Clear
+        hasNotes = CBool(CallByName(sld, "HasNotesSlide", VbGet))
+        If Err.Number <> 0 Then
+            aErrNum = Err.Number
+            aErrDesc = Err.Description
+            log = log & "  ERROR: " & aErrNum & " - " & aErrDesc & vbCrLf
+            summaryCounts(1) = summaryCounts(1) + 1
+        Else
+            log = log & "  Result: " & hasNotes & vbCrLf
+        End If
+        On Error GoTo 0
+
+        ' =============================================
+        ' METHOD B: NotesSlide
+        ' =============================================
+        log = log & "[B] NotesSlide:" & vbCrLf
+        Dim ns As Object
+        Dim bErrNum As Long
+        Dim bErrDesc As String
+        Dim notesSlideText As String
+        Dim nsShp As Object
+
+        notesSlideText = ""
+        On Error Resume Next
+        Err.Clear
+        Set ns = CallByName(sld, "NotesSlide", VbGet)
+        bErrNum = Err.Number
+        bErrDesc = Err.Description
+        If Err.Number <> 0 Then
+            log = log & "  NotesSlide: NOT ACCESSIBLE (Err=" & bErrNum & " " & bErrDesc & ")" & vbCrLf
+            summaryCounts(2) = summaryCounts(2) + 1
+        ElseIf ns Is Nothing Then
+            log = log & "  NotesSlide: Is Nothing" & vbCrLf
+            summaryCounts(2) = summaryCounts(2) + 1
+        Else
+            log = log & "  NotesSlide: accessible" & vbCrLf
+            log = log & "  Shapes on notes slide: " & ns.Shapes.Count & vbCrLf
+
+            ' Try Placeholders(2) first (standard notes text box)
+            On Error Resume Next
+            Err.Clear
+            Dim phText As String
+            phText = ""
+            If ns.Shapes.Count >= 2 Then
+                Dim ph As Object
+                Set ph = Nothing
+                Set ph = ns.Shapes.Placeholders(2)
+                If Not ph Is Nothing Then
+                    If ph.HasTextFrame Then
+                        If ph.TextFrame.HasText Then
+                            phText = Trim(ph.TextFrame.TextRange.Text)
+                        End If
+                    End If
+                End If
+            End If
+            If Len(phText) > 0 Then
+                notesSlideText = phText
+                log = log & "  Placeholders(2) text: """ & Left(phText, 100) & """" & vbCrLf
+            Else
+                log = log & "  Placeholders(2): no text found" & vbCrLf
+                ' Fallback: iterate all shapes
+                For Each nsShp In ns.Shapes
+                    Dim nsShpTxt As String
+                    nsShpTxt = ""
+                    On Error Resume Next
+                    If nsShp.HasTextFrame Then
+                        If nsShp.TextFrame.HasText Then
+                            nsShpTxt = Trim(nsShp.TextFrame.TextRange.Text)
+                        End If
+                    End If
+                    On Error GoTo 0
+                    If Len(nsShpTxt) > 0 Then
+                        notesSlideText = nsShpTxt
+                        log = log & "  Shape '" & nsShp.Name & "' (Type=" & nsShp.Type & "): """ & Left(nsShpTxt, 100) & """" & vbCrLf
+                        Exit For
+                    Else
+                        log = log & "  Shape '" & nsShp.Name & "': Type=" & nsShp.Type
+                        On Error Resume Next
+                        If nsShp.HasTextFrame Then
+                            If nsShp.TextFrame.HasText Then
+                                log = log & ", HasText=True (empty)"
+                            Else
+                                log = log & ", HasText=False"
+                            End If
+                        Else
+                            log = log & ", HasTextFrame=False"
+                        End If
+                        On Error GoTo 0
+                        log = log & vbCrLf
+                    End If
+                Next nsShp
+            End If
+            On Error GoTo 0
+        End If
+        On Error GoTo 0
+
+        ' =============================================
+        ' METHOD C: NotesPage
+        ' =============================================
+        log = log & "[C] NotesPage:" & vbCrLf
+        Dim np As Object
+        Dim cErrNum As Long
+        Dim cErrDesc As String
+        Dim notesPageText As String
+
+        notesPageText = ""
+        On Error Resume Next
+        Err.Clear
+        Set np = CallByName(sld, "NotesPage", VbGet)
+        cErrNum = Err.Number
+        cErrDesc = Err.Description
+        If Err.Number <> 0 Then
+            log = log & "  NotesPage: NOT ACCESSIBLE (Err=" & cErrNum & " " & cErrDesc & ")" & vbCrLf
+            summaryCounts(3) = summaryCounts(3) + 1
+        ElseIf np Is Nothing Then
+            log = log & "  NotesPage: Is Nothing" & vbCrLf
+            summaryCounts(3) = summaryCounts(3) + 1
+        Else
+            log = log & "  NotesPage: accessible, Shapes=" & np.Shapes.Count & vbCrLf
+            Dim npShp As Object
+            For Each npShp In np.Shapes
+                Dim npShpTxt As String
+                npShpTxt = ""
+                On Error Resume Next
+                If npShp.HasTextFrame Then
+                    If npShp.TextFrame.HasText Then
+                        npShpTxt = Trim(npShp.TextFrame.TextRange.Text)
+                    End If
+                End If
+                On Error GoTo 0
+                log = log & "    [" & npShp.Name & "] Type=" & npShp.Type
+                On Error Resume Next
+                If npShp.HasTextFrame Then
+                    If npShp.TextFrame.HasText Then
+                        If Len(npShpTxt) > 0 Then
+                            log = log & ", HasText=True, Text=""" & Left(npShpTxt, 80) & """"
+                            If Len(notesPageText) = 0 Then notesPageText = npShpTxt
+                        Else
+                            log = log & ", HasText=True (empty)"
+                        End If
+                    Else
+                        log = log & ", HasText=False"
+                    End If
+                Else
+                    log = log & ", HasTextFrame=False"
+                End If
+                On Error GoTo 0
+                log = log & vbCrLf
+            Next npShp
+            ' Placeholders(2) check — correct way to get notes
+            On Error Resume Next
+            Err.Clear
+            Dim npPh As Object
+            Dim npPhTxt As String
+            npPhTxt = ""
+            Set npPh = np.Shapes.Placeholders(2)
+            If Not npPh Is Nothing Then
+                If npPh.HasTextFrame Then
+                    If npPh.TextFrame.HasText Then
+                        npPhTxt = Trim(npPh.TextFrame.TextRange.Text)
+                    End If
+                End If
+            End If
+            If Len(npPhTxt) > 0 Then
+                log = log & "    [Placeholders(2)] Text=""" & Left(npPhTxt, 80) & """" & vbCrLf
+            Else
+                log = log & "    [Placeholders(2)] EMPTY (no notes)" & vbCrLf
+                emptyNotesCount = emptyNotesCount + 1
+                If Len(emptyNotesList) > 0 Then emptyNotesList = emptyNotesList & ", "
+                emptyNotesList = emptyNotesList & slideNum
+            End If
+            On Error GoTo 0
+        End If
+        On Error GoTo 0
+
+        ' =============================================
+        ' METHOD D: GetNotesText (reproduction)
+        ' =============================================
+        log = log & "[D] GetNotesText (repro):" & vbCrLf
+        Dim dText As String
+        dText = GetNotesText_Repro(sld)
+        If Len(dText) > 0 Then
+            log = log & "  Result: """ & Left(dText, 100) & """" & vbCrLf
+        Else
+            log = log & "  Result: """" (empty — reproduces false positive)" & vbCrLf
+            summaryCounts(4) = summaryCounts(4) + 1
+        End If
+
+        log = log & vbCrLf
+    Next slideNum
+
+    ' =============================================
+    ' SUMMARY
+    ' =============================================
+    log = log & "==================================================" & vbCrLf & _
+          "SUMMARY" & vbCrLf & _
+          "==================================================" & vbCrLf & _
+          "Slides where method returned empty/no notes:" & vbCrLf & _
+          "  [A] HasNotesSlide property error: " & summaryCounts(1) & vbCrLf & _
+          "  [B] NotesSlide not accessible: " & summaryCounts(2) & vbCrLf & _
+          "  [C] NotesPage not accessible: " & summaryCounts(3) & vbCrLf & _
+          "  [D] GetNotesText returns empty: " & summaryCounts(4) & vbCrLf & _
+          "--------------------------------------------------" & vbCrLf & _
+          "  [CORRECT] Placeholders(2) empty (no notes): " & emptyNotesCount & vbCrLf
+    If emptyNotesCount > 0 Then
+        log = log & "  Slides: " & emptyNotesList & vbCrLf
+    End If
+    log = log & "==================================================" & vbCrLf
+
+    ' Write log to desktop
+    Dim wsh As Object
+    Dim fileNum As Integer
+    Dim logPath As String
+    Set wsh = CreateObject("WScript.Shell")
+    logPath = wsh.SpecialFolders("Desktop") & "\PPT_Notes_Test_" & Format(Now, "yyyymmdd_hhmmss") & ".txt"
+    Set wsh = Nothing
+    fileNum = FreeFile
+    Open logPath For Output As #fileNum
+    Print #fileNum, log
+    Close #fileNum
+
+    MsgBox "Diagnostic complete. See " & logPath, vbInformation, "Notes Test Done"
+End Sub
+
+' =====================================================
+' Corrected notes extraction — uses Placeholders(2) only.
+' No fallback to other shapes (avoids slide number bug).
+' =====================================================
+Private Function GetNotesText_Repro(ByRef sld As Object) As String
+    Dim np As Object
+    On Error Resume Next
+    Set np = sld.NotesPage
+    If Not np Is Nothing Then
+        Dim ph As Object
+        Set ph = np.Shapes.Placeholders(2)
+        If Not ph Is Nothing Then
+            If ph.HasTextFrame Then
+                If ph.TextFrame.HasText Then
+                    Dim txt As String
+                    txt = Trim(ph.TextFrame.TextRange.Text)
+                    If Len(txt) > 0 Then
+                        GetNotesText_Repro = txt
+                    End If
+                End If
+            End If
+        End If
+    End If
+    On Error GoTo 0
+End Function
