@@ -4,7 +4,7 @@
 
 ## What this is
 
-Single VBA PowerPoint module in `slide_flatten_rename.txt`. Contains two workflows:
+Single VBA PowerPoint module in `PPT VBA Tool.txt`. Contains two workflows:
 
 | Alt+F8 entry point | What it does |
 |---|---|
@@ -67,7 +67,7 @@ Note: the separator character class allows **mixing** (e.g. `1.2/3` matches). Th
 | # | Check | What it detects |
 |---|-------|-----------------|
 | 8 | Missing/empty notes | Slide has no `NotesSlide` or notes text is blank |
-| 9 | Notes language mismatch | `DetectLanguage(notes)` ≠ `pptLang` — flagged with ±2 sentence context |
+| 9 | *(removed)* | Notes language comparison now handled by Check 11 |
 
 ### Translation gap checks
 | # | Check | What it detects |
@@ -91,15 +91,18 @@ Two separate name assignments serving different purposes:
 Both are intentional; see also tooltip/outline/accessibility binding via the native placeholder.
 
 ## Debug log
-- Written to Desktop: `Articulate_Title_Update_Log_yyyymmdd_hhmmss.txt`
+- Written beside the original PPT: `Articulate_Title_Update_Log_yyyymmdd_hhmmss.txt`
 - Timestamped per run — never overwrites previous logs
-- **Check log** (`PPTTools_CheckSlides`): contains error analysis log, notes audit, translation gap check, skipped slides summary, and full per-slide debug matrix
+- **Check log** (`PPTTools_CheckSlides`): contains error analysis log, notes audit, translation gap check, skipped slides summary, and full per-slide debug matrix — **opened automatically** after the run
 - **Flatten log** (`PPTTools_Flatten`): brief — total slides, flattened count, skipped count
 
 ## Error handling
 **Check workflow** (`RunAllChecks`): simple error trapping — no file changes to roll back.
 
 **Flatten workflow** (`FlattenPresentation`): emergency rollback on any error:
-- Closes `_Flattened.pptx` without saving (`Saved = msoTrue` to suppress prompts)
+- Closes `_Flattened.pptx` without saving (`Saved = msoTrue` to suppress prompts) if not yet saved
 - Deletes `PPT_Temp_Images_Internal\` temp folder
 - Shows "System Failure" message box
+
+**Normal flatten completion:**
+- Original presentation is closed; flattened copy stays open and active on slide 1
