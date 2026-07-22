@@ -79,7 +79,8 @@ Language detection uses CJK Unicode range (`\u4E00`–`\u9FFF`) vs Latin letters
 
 ## PPTTools_Flatten
 - Exports each slide as PNG at 2× resolution into `PPT_Temp_Images_Internal\` (deleted after run)
-- Opens `_Flattened.pptx` copy, deletes all shapes from each slide, inserts PNGs as full-slide backgrounds
+- Opens `_Flattened.pptx` copy, deletes all shapes from each slide **except media shapes** (audio/video — `msoMedia` type), inserts PNGs as full-slide backgrounds
+- Preserved media shapes remain on top of the flattened PNG — audio plays normally
 - Injects invisible 1pt white-on-white title text into the native title placeholder (`ppLayoutTitleOnly`)
 - Does NOT run error analysis or notes checks (assumes user fixed issues found by `PPTTools_CheckSlides`)
 

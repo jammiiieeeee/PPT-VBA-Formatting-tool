@@ -26,6 +26,12 @@ Private mTotalSlides As Long
 Private mSldWidth As Single
 Private mSldHeight As Single
 
+' Backup arrays — saved before AnalyseDuplicates so ProcessFixableChanges
+' can revert arrays on user decline and determine remaining fixables.
+Private mBackupIndices() As String
+Private mBackupTexts() As String
+Private mBackupFinalTitles() As String
+
 Private Type TitleResult
     Index As String
     Text As String
@@ -502,28 +508,53 @@ Private Sub RunAllChecks()
         End If
     End If
 
-    ' Phase 2: Error analysis
+    ' Phase 2: Error analysis — with backup for rollback support
     Dim reportDetails As String, fixableCount As Long, unfixableCount As Long
+
+    ' Snapshot arrays before AnalyseDuplicates modifies them
+    ReDim mBackupIndices(1 To mTotalSlides)
+    ReDim mBackupTexts(1 To mTotalSlides)
+    ReDim mBackupFinalTitles(1 To mTotalSlides)
+    For slideNum = 1 To mTotalSlides
+        mBackupIndices(slideNum) = mIndices(slideNum)
+        mBackupTexts(slideNum) = mTexts(slideNum)
+        mBackupFinalTitles(slideNum) = mFinalTitles(slideNum)
+    Next slideNum
+
     AnalyseDuplicates reportDetails, fixableCount, unfixableCount
 
-    ' Phase 3: Notes audit
+    ' Phase 3: Prompt user to apply fixable changes (grouped by consecutive runs)
+    ' Returns True if any slides were reverted (arrays rolled back to backup).
+    Dim anyReverted As Boolean
+    anyReverted = ProcessFixableChanges(origPres)
+
+    ' Phase 4: Re-run analysis if slides were reverted so the log reflects
+    ' the true remaining state (unfixed issues get fresh suffix/renumbering).
+    If anyReverted Then
+        reportDetails = ""
+        fixableCount = 0
+        unfixableCount = 0
+        AnalyseDuplicates reportDetails, fixableCount, unfixableCount
+    End If
+
+    ' Phase 5: Notes audit
     Dim emptyNotesCount As Long, notesLog As String
     AuditNotes origPres, emptyNotesCount, notesLog
 
-    ' Phase 4: Translation gap check
+    ' Phase 6: Translation gap check
     Dim shapeGapCount As Long, notesGapCount As Long, visGapSlides As Long
     Dim visShapesChecked As Long, transSummary As String
     CheckTranslationGaps origPres, pptLang, shapeGapCount, notesGapCount, visGapSlides, visShapesChecked, transSummary
 
-    ' Phase 5: Skipped slides summary
+    ' Phase 7: Skipped slides summary
     Dim skippedSummary As String
     BuildSkippedSummary skippedSummary
 
-    ' Phase 6: Debug inspection matrix
+    ' Phase 8: Debug inspection matrix
     Dim matrixLog As String
     BuildDebugMatrix matrixLog
 
-    ' Phase 7: Build comprehensive summary
+    ' Phase 9: Build comprehensive summary
     Dim totalSkipped As Long, totalProcessed As Long, totalWithNotes As Long
     totalSkipped = 0
     For slideNum = 1 To mTotalSlides
@@ -559,14 +590,11 @@ Private Sub RunAllChecks()
     reportSummary = reportSummary & vbCrLf
     reportSummary = reportSummary & "==================================================" & vbCrLf & vbCrLf
 
-    ' Phase 8: Write report
+    ' Phase 10: Write report (post-fix state)
     Dim fullReport As String
     fullReport = reportSummary & reportDetails & notesLog & transSummary & skippedSummary & matrixLog
     Dim logPath As String
     logPath = WriteLog(fullReport, origPres.Path)
-
-    ' Phase 9: Prompt user to apply fixable title changes one by one
-    ProcessFixableChanges origPres
 
     Dim msg As String
     msg = "Check complete." & vbCrLf & vbCrLf
@@ -1003,91 +1031,143 @@ End Sub
 
 ' ===================================================================
 ' PHASE: ProcessFixableChanges
-' Called after AnalyseDuplicates. If fixable changes were detected,
-' prompts the user one-by-one and applies accepted changes to the
-' actual presentation shapes. Saves the presentation if any applied.
+' Called after AnalyseDuplicates. Builds consecutive-slide groups
+' from array diffs, prompts the user one group at a time, and
+' applies accepted changes to the actual presentation shapes.
+'
+' Yes  → update shape text, keep array changes (committed).
+' No   → revert arrays to backup for that group (rolled back).
+' Cancel → revert all remaining groups and exit.
+'
+' Returns True if ANY slide arrays were reverted to backup
+' (so the caller knows to re-run AnalyseDuplicates for accurate counts).
 ' ===================================================================
 
-Private Sub ProcessFixableChanges(ByRef origPres As Presentation)
+Private Function ProcessFixableChanges(ByRef origPres As Presentation) As Boolean
     Dim slideNum As Long
-    Dim fixableSlides() As Long
-    Dim fixableCount As Long
-    Dim sld As Slide
-    Dim objShape As Shape
+    Dim groupStart() As Long, groupEnd() As Long
+    Dim groupCount As Long
+    Dim i As Long, g As Long, s As Long
 
-    ' Collect all slides where mFinalTitles diverged from mOrigTitles
-    ReDim fixableSlides(1 To mTotalSlides)
-    fixableCount = 0
-    For slideNum = 1 To mTotalSlides
+    ' Build groups of consecutive slides where mFinalTitles differs
+    ReDim groupStart(1 To mTotalSlides)
+    ReDim groupEnd(1 To mTotalSlides)
+    groupCount = 0
+
+    slideNum = 1
+    Do While slideNum <= mTotalSlides
         If Not mSkip(slideNum) And mFinalTitles(slideNum) <> mOrigTitles(slideNum) Then
-            fixableCount = fixableCount + 1
-            fixableSlides(fixableCount) = slideNum
+            groupCount = groupCount + 1
+            groupStart(groupCount) = slideNum
+            Do While slideNum <= mTotalSlides And Not mSkip(slideNum) And mFinalTitles(slideNum) <> mOrigTitles(slideNum)
+                slideNum = slideNum + 1
+            Loop
+            groupEnd(groupCount) = slideNum - 1
+        Else
+            slideNum = slideNum + 1
         End If
-    Next slideNum
+    Loop
 
-    If fixableCount = 0 Then Exit Sub
+    If groupCount = 0 Then
+        ProcessFixableChanges = False
+        Exit Function
+    End If
 
     ' Ask user whether they want to review
     Dim msg As String
-    msg = "Fixable changes detected (" & fixableCount & " total):" & vbCrLf & vbCrLf
-    msg = msg & "Would you like to review and apply them one by one?"
+    msg = "Fixable changes detected (" & groupCount & " group(s)):" & vbCrLf & vbCrLf
+    msg = msg & "Would you like to review and apply them one group at a time?"
 
     If MsgBox(msg, vbYesNo + vbQuestion, "Fixable Changes Detected") = vbNo Then
-        Exit Sub
+        ProcessFixableChanges = False
+        Exit Function
     End If
 
-    ' Process each fixable change one at a time
+    ' Process each group
     Dim appliedCount As Long: appliedCount = 0
     Dim skippedCount As Long: skippedCount = 0
-    Dim i As Long, sIdx As Long
+    Dim anyReverted As Boolean: anyReverted = False
+    Dim sld As Slide
+    Dim objShape As Shape
 
-    For i = 1 To fixableCount
-        sIdx = fixableSlides(i)
-        Set sld = origPres.Slides(sIdx)
+    For g = 1 To groupCount
+        Dim startS As Long: startS = groupStart(g)
+        Dim endS As Long: endS = groupEnd(g)
+        Dim groupSize As Long: groupSize = endS - startS + 1
 
+        ' Build prompt for this group
         Dim prompt As String
-        prompt = "Slide " & sIdx & ":" & vbCrLf & vbCrLf
-        prompt = prompt & "  Original: '" & mOrigTitles(sIdx) & "'" & vbCrLf
-        prompt = prompt & "  Updated:  '" & mFinalTitles(sIdx) & "'" & vbCrLf & vbCrLf
-        prompt = prompt & "Apply this change?"
+        If groupSize = 1 Then
+            prompt = "Slide " & startS & ":" & vbCrLf & vbCrLf
+        Else
+            prompt = "Slides " & startS & "-" & endS & " (" & groupSize & " slides):" & vbCrLf & vbCrLf
+        End If
+
+        For s = startS To endS
+            prompt = prompt & "  Slide " & s & ": '" & mOrigTitles(s) & "'" & vbCrLf
+            prompt = prompt & "         → '" & mFinalTitles(s) & "'" & vbCrLf
+        Next s
+
+        prompt = prompt & vbCrLf & "Apply these " & groupSize & " change(s)?"
 
         Dim response As VbMsgBoxResult
         response = MsgBox(prompt, vbYesNoCancel + vbQuestion, _
-                          "Fixable Change " & i & " of " & fixableCount)
+                          "Fixable Change Group " & g & " of " & groupCount)
 
         If response = vbCancel Then
+            ' Revert all remaining groups (including current)
+            For i = g To groupCount
+                For s = groupStart(i) To groupEnd(i)
+                    mIndices(s) = mBackupIndices(s)
+                    mTexts(s) = mBackupTexts(s)
+                    mFinalTitles(s) = mBackupFinalTitles(s)
+                Next s
+                skippedCount = skippedCount + (groupEnd(i) - groupStart(i) + 1)
+            Next i
+            anyReverted = True
             Exit For
+
         ElseIf response = vbYes Then
-            ' Apply the change to the actual shape in the presentation
-            If mShapeNames(sIdx) <> "" Then
-                Set objShape = Nothing
-                On Error Resume Next
-                Set objShape = sld.Shapes(mShapeNames(sIdx))
-                On Error GoTo 0
+            ' Apply every slide in this group
+            For s = startS To endS
+                Set sld = origPres.Slides(s)
+                If mShapeNames(s) <> "" Then
+                    Set objShape = Nothing
+                    On Error Resume Next
+                    Set objShape = sld.Shapes(mShapeNames(s))
+                    On Error GoTo 0
 
-                If Not objShape Is Nothing Then
-                    If objShape.HasTextFrame And objShape.TextFrame.HasText Then
-                        Dim textToAssign As String
-                        textToAssign = mFinalTitles(sIdx)
+                    If Not objShape Is Nothing Then
+                        If objShape.HasTextFrame And objShape.TextFrame.HasText Then
+                            Dim textToAssign As String
+                            textToAssign = mFinalTitles(s)
 
-                        If mMatchLength(sIdx) <= objShape.TextFrame.TextRange.Length Then
-                            If mMatchLength(sIdx) > 0 Then
-                                objShape.TextFrame.TextRange.Characters(1, mMatchLength(sIdx)).Text = textToAssign
+                            If mMatchLength(s) <= objShape.TextFrame.TextRange.Length Then
+                                If mMatchLength(s) > 0 Then
+                                    objShape.TextFrame.TextRange.Characters(1, mMatchLength(s)).Text = textToAssign
+                                Else
+                                    objShape.TextFrame.TextRange.Text = textToAssign
+                                End If
                             Else
                                 objShape.TextFrame.TextRange.Text = textToAssign
                             End If
-                        Else
-                            objShape.TextFrame.TextRange.Text = textToAssign
-                        End If
 
-                        appliedCount = appliedCount + 1
+                            appliedCount = appliedCount + 1
+                        End If
                     End If
                 End If
-            End If
-        Else
-            skippedCount = skippedCount + 1
+            Next s
+
+        Else ' vbNo — reject the whole group, revert arrays to backup
+            For s = startS To endS
+                mIndices(s) = mBackupIndices(s)
+                mTexts(s) = mBackupTexts(s)
+                mFinalTitles(s) = mBackupFinalTitles(s)
+            Next s
+            anyReverted = True
+            skippedCount = skippedCount + groupSize
         End If
-    Next i
+    Next g
 
     ' Save if any changes were applied
     If appliedCount > 0 Then
@@ -1098,7 +1178,9 @@ Private Sub ProcessFixableChanges(ByRef origPres As Presentation)
     Else
         MsgBox "No changes were applied.", vbInformation, "No Changes"
     End If
-End Sub
+
+    ProcessFixableChanges = anyReverted
+End Function
 
 ' ===================================================================
 ' FLATTENING ACTION: FlattenPresentation
@@ -1204,9 +1286,11 @@ Private Sub FlattenPresentation()
             End If
         End If
 
-        ' Clean native layout shape vector trees
+        ' Clean native layout shape vector trees — preserve media shapes (audio/video)
         For i = sld.Shapes.Count To 1 Step -1
-            sld.Shapes(i).Delete
+            If sld.Shapes(i).Type <> msoMedia Then
+                sld.Shapes(i).Delete
+            End If
         Next i
 
         imgPath = tempFolder & "Slide_" & sld.SlideIndex & ".png"
