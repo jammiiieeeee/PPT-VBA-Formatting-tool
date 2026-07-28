@@ -10,27 +10,29 @@
 Option Explicit
 
 ' -------------------------------------------------------------------
-' Module-level storage shared between the two workflows
+' Data types — replace module-level mutable arrays.
+' All state flows through AnalysisResult; no globals needed.
 ' -------------------------------------------------------------------
-Private mIndices() As String
-Private mTexts() As String
-Private mOrigTitles() As String
-Private mFinalTitles() As String
-Private mShapeNames() As String
-Private mMatchLength() As Long
-Private mSkip() As Boolean
-Private mSkipReason() As String
-Private mCheckedShapes() As String
-Private mDiscoveredTexts() As String
-Private mTotalSlides As Long
-Private mSldWidth As Single
-Private mSldHeight As Single
 
-' Backup arrays — saved before AnalyseDuplicates so ProcessFixableChanges
-' can revert arrays on user decline and determine remaining fixables.
-Private mBackupIndices() As String
-Private mBackupTexts() As String
-Private mBackupFinalTitles() As String
+Private Type SlideData
+    Index As String
+    Text As String
+    OrigTitle As String
+    FinalTitle As String
+    ShapeName As String
+    MatchLength As Long
+    Skip As Boolean
+    SkipReason As String
+    CheckedShapes As String
+    DiscoveredTexts As String
+End Type
+
+Private Type AnalysisResult
+    Slides() As SlideData
+    TotalSlides As Long
+    SlideWidth As Single
+    SlideHeight As Single
+End Type
 
 Private Type TitleResult
     Index As String
@@ -57,25 +59,38 @@ Public Sub PPTTools_Flatten()
 End Sub
 
 ' ===================================================================
-' SHARED: PopulateTitleArrays
-' Extracts titles for all slides using depth-based selection.
-' Same logic as the original STEP 1.
+' SHARED: CopySlideData
+' Deep-copies a SlideData() array. Used for backup before
+' AnalyseDuplicates so ProcessFixableChanges can revert on decline.
 ' ===================================================================
 
-Private Sub PopulateTitleArrays(ByRef origPres As Presentation, _
-                                Optional ByVal captureDebug As Boolean = False)
+Private Function CopySlideData(ByRef src() As SlideData) As SlideData()
+    Dim dst() As SlideData
+    Dim lo As Long, hi As Long, i As Long
+    lo = LBound(src): hi = UBound(src)
+    ReDim dst(lo To hi)
+    For i = lo To hi
+        dst(i) = src(i)
+    Next i
+    CopySlideData = dst
+End Function
 
-    Dim sldWidth As Single, sldHeight As Single, totalSlides As Long
+' ===================================================================
+' SHARED: PopulateTitleArrays
+' Extracts titles for all slides using depth-based selection.
+' Returns an AnalysisResult — no module-level state written.
+' ===================================================================
+
+Private Function PopulateTitleArrays(ByRef origPres As Presentation, _
+                                     Optional ByVal captureDebug As Boolean = False) As AnalysisResult
+
+    Dim result As AnalysisResult
     Dim regex As Object
     Dim slideNum As Long, objSlide As Slide
 
-    sldWidth = origPres.PageSetup.SlideWidth
-    sldHeight = origPres.PageSetup.SlideHeight
-    totalSlides = origPres.Slides.Count
-
-    mTotalSlides = totalSlides
-    mSldWidth = sldWidth
-    mSldHeight = sldHeight
+    result.SlideWidth = origPres.PageSetup.SlideWidth
+    result.SlideHeight = origPres.PageSetup.SlideHeight
+    result.TotalSlides = origPres.Slides.Count
 
     Set regex = CreateObject("VBScript.RegExp")
     With regex
@@ -84,40 +99,29 @@ Private Sub PopulateTitleArrays(ByRef origPres As Presentation, _
         .Global = True
     End With
 
-    ReDim mIndices(1 To totalSlides)
-    ReDim mTexts(1 To totalSlides)
-    ReDim mOrigTitles(1 To totalSlides)
-    ReDim mFinalTitles(1 To totalSlides)
-    ReDim mShapeNames(1 To totalSlides)
-    ReDim mMatchLength(1 To totalSlides)
-    ReDim mSkip(1 To totalSlides)
-    ReDim mSkipReason(1 To totalSlides)
+    ReDim result.Slides(1 To result.TotalSlides)
 
-    If captureDebug Then
-        ReDim mCheckedShapes(1 To totalSlides)
-        ReDim mDiscoveredTexts(1 To totalSlides)
-    End If
-
-    For slideNum = 1 To totalSlides
+    For slideNum = 1 To result.TotalSlides
         Set objSlide = origPres.Slides(slideNum)
-        Dim result As TitleResult
-        result = ExtractSlideTitle(objSlide, sldHeight, regex, slideNum, captureDebug)
+        Dim titleResult As TitleResult
+        titleResult = ExtractSlideTitle(objSlide, result.SlideHeight, regex, slideNum, captureDebug)
 
-        mSkip(slideNum) = result.Skip
-        mSkipReason(slideNum) = result.SkipReason
-        mShapeNames(slideNum) = result.ShapeName
-        mMatchLength(slideNum) = result.MatchLength
-        mIndices(slideNum) = result.Index
-        mTexts(slideNum) = result.Text
-        mOrigTitles(slideNum) = result.OrigTitle
-        mFinalTitles(slideNum) = result.OrigTitle
-
-        If captureDebug Then
-            mCheckedShapes(slideNum) = result.CheckedShapes
-            mDiscoveredTexts(slideNum) = result.DiscoveredTexts
-        End If
+        With result.Slides(slideNum)
+            .Skip = titleResult.Skip
+            .SkipReason = titleResult.SkipReason
+            .ShapeName = titleResult.ShapeName
+            .MatchLength = titleResult.MatchLength
+            .Index = titleResult.Index
+            .Text = titleResult.Text
+            .OrigTitle = titleResult.OrigTitle
+            .FinalTitle = titleResult.OrigTitle
+            .CheckedShapes = titleResult.CheckedShapes
+            .DiscoveredTexts = titleResult.DiscoveredTexts
+        End With
     Next slideNum
-End Sub
+
+    PopulateTitleArrays = result
+End Function
 
 ' ===================================================================
 ' SHARED: CountSeparators
@@ -162,9 +166,10 @@ Private Function ExtractSlideTitle(ByVal sld As Slide, ByVal sldHeight As Single
             Dim lowerText As String
             lowerText = LCase(Trim(objShape.TextFrame.TextRange.Text))
             If InStr(lowerText, "thank you") > 0 Or _
-               InStr(lowerText, "thanks") > 0 Or _
+               (InStr(lowerText, "thanks") > 0 And InStr(lowerText, "thanksgiving") = 0) Or _
                InStr(lowerText, "??") > 0 Or _
-               InStr(lowerText, "q&a") > 0 Then
+               InStr(lowerText, "q&a") > 0 Or _
+               InStr(lowerText, "q & a") > 0 Then
                 result.Skip = True
                 result.SkipReason = "Keyword match"
                 ExtractSlideTitle = result
@@ -440,8 +445,15 @@ End Function
 ' ===================================================================
 
 Private Function WriteLog(ByVal content As String, ByVal saveDir As String) As String
-    Dim reportPath As String
-    reportPath = saveDir & "\Articulate_Title_Update_Log_" & Format(Now, "yyyymmdd_hhmmss") & ".txt"
+    Dim baseName As String, reportPath As String
+    baseName = saveDir & "\Articulate_Title_Update_Log_" & Format(Now, "yyyymmdd_hhmmss")
+    reportPath = baseName & ".txt"
+    ' Avoid overwriting if two runs land in the same second
+    Dim fileCounter As Long: fileCounter = 2
+    Do While Dir(reportPath) <> ""
+        reportPath = baseName & "_" & fileCounter & ".txt"
+        fileCounter = fileCounter + 1
+    Loop
     Dim fileNum As Integer
     fileNum = FreeFile
     On Error Resume Next
@@ -449,8 +461,14 @@ Private Function WriteLog(ByVal content As String, ByVal saveDir As String) As S
     If Err.Number <> 0 Then
         Err.Clear
         ' Fall back to Desktop if the original path fails (e.g. OneDrive/SharePoint)
-        reportPath = CreateObject("WScript.Shell").SpecialFolders("Desktop") & _
-                     "\Articulate_Title_Update_Log_" & Format(Now, "yyyymmdd_hhmmss") & ".txt"
+        baseName = CreateObject("WScript.Shell").SpecialFolders("Desktop") & _
+                   "\Articulate_Title_Update_Log_" & Format(Now, "yyyymmdd_hhmmss")
+        reportPath = baseName & ".txt"
+        fileCounter = 2
+        Do While Dir(reportPath) <> ""
+            reportPath = baseName & "_" & fileCounter & ".txt"
+            fileCounter = fileCounter + 1
+        Loop
         fileNum = FreeFile
         Open reportPath For Output As #fileNum
     End If
@@ -473,26 +491,32 @@ Private Sub RunAllChecks()
         MsgBox "Please save your presentation before running checks.", vbCritical, "Save Required"
         Exit Sub
     End If
+    If origPres.Slides.Count = 0 Then
+        MsgBox "Presentation has no slides.", vbExclamation, "Nothing to Check"
+        Exit Sub
+    End If
 
-    PopulateTitleArrays origPres, captureDebug:=True
+    ' Phase 1: Extract titles — returns local AnalysisResult, no globals
+    Dim result As AnalysisResult
+    result = PopulateTitleArrays(origPres, captureDebug:=True)
 
     ' Compute ppt-level language from all non-skipped title texts
     Dim slideNum As Long
     Dim fullTitleText As String, pptLang As String
     fullTitleText = ""
-    For slideNum = 1 To mTotalSlides
-        If Not mSkip(slideNum) And mTexts(slideNum) <> "" Then
-            fullTitleText = fullTitleText & " " & mTexts(slideNum)
+    For slideNum = 1 To result.TotalSlides
+        If Not result.Slides(slideNum).Skip And result.Slides(slideNum).Text <> "" Then
+            fullTitleText = fullTitleText & " " & result.Slides(slideNum).Text
         End If
     Next slideNum
     pptLang = DetectLanguage(fullTitleText)
     If pptLang = "" Or pptLang = "MIXED" Then
         Dim t As Long, zhCount As Long, enCount As Long
         zhCount = 0: enCount = 0
-        For t = 1 To mTotalSlides
-            If Not mSkip(t) And mTexts(t) <> "" Then
+        For t = 1 To result.TotalSlides
+            If Not result.Slides(t).Skip And result.Slides(t).Text <> "" Then
                 Dim lang As String
-                lang = DetectLanguage(mTexts(t))
+                lang = DetectLanguage(result.Slides(t).Text)
                 If lang = "ZH" Then zhCount = zhCount + 1
                 If lang = "EN" Then enCount = enCount + 1
             End If
@@ -508,25 +532,17 @@ Private Sub RunAllChecks()
         End If
     End If
 
-    ' Phase 2: Error analysis — with backup for rollback support
+    ' Phase 2: Error analysis — backup before AnalyseDuplicates modifies slides
     Dim reportDetails As String, fixableCount As Long, unfixableCount As Long
+    Dim backupSlides() As SlideData
+    backupSlides = CopySlideData(result.Slides)
 
-    ' Snapshot arrays before AnalyseDuplicates modifies them
-    ReDim mBackupIndices(1 To mTotalSlides)
-    ReDim mBackupTexts(1 To mTotalSlides)
-    ReDim mBackupFinalTitles(1 To mTotalSlides)
-    For slideNum = 1 To mTotalSlides
-        mBackupIndices(slideNum) = mIndices(slideNum)
-        mBackupTexts(slideNum) = mTexts(slideNum)
-        mBackupFinalTitles(slideNum) = mFinalTitles(slideNum)
-    Next slideNum
-
-    AnalyseDuplicates reportDetails, fixableCount, unfixableCount
+    AnalyseDuplicates result.Slides, result.TotalSlides, reportDetails, fixableCount, unfixableCount
 
     ' Phase 3: Prompt user to apply fixable changes (grouped by consecutive runs)
     ' Returns True if any slides were reverted (arrays rolled back to backup).
     Dim anyReverted As Boolean
-    anyReverted = ProcessFixableChanges(origPres)
+    anyReverted = ProcessFixableChanges(origPres, result.Slides, backupSlides, result.TotalSlides)
 
     ' Phase 4: Re-run analysis if slides were reverted so the log reflects
     ' the true remaining state (unfixed issues get fresh suffix/renumbering).
@@ -534,41 +550,41 @@ Private Sub RunAllChecks()
         reportDetails = ""
         fixableCount = 0
         unfixableCount = 0
-        AnalyseDuplicates reportDetails, fixableCount, unfixableCount
+        AnalyseDuplicates result.Slides, result.TotalSlides, reportDetails, fixableCount, unfixableCount
     End If
 
     ' Phase 5: Notes audit
     Dim emptyNotesCount As Long, notesLog As String
-    AuditNotes origPres, emptyNotesCount, notesLog
+    AuditNotes origPres, result.TotalSlides, emptyNotesCount, notesLog
 
     ' Phase 6: Translation gap check
     Dim shapeGapCount As Long, notesGapCount As Long, visGapSlides As Long
     Dim visShapesChecked As Long, transSummary As String
-    CheckTranslationGaps origPres, pptLang, shapeGapCount, notesGapCount, visGapSlides, visShapesChecked, transSummary
+    CheckTranslationGaps origPres, result.Slides, result.TotalSlides, pptLang, shapeGapCount, notesGapCount, visGapSlides, visShapesChecked, transSummary
 
     ' Phase 7: Skipped slides summary
     Dim skippedSummary As String
-    BuildSkippedSummary skippedSummary
+    BuildSkippedSummary result.Slides, result.TotalSlides, skippedSummary
 
     ' Phase 8: Debug inspection matrix
     Dim matrixLog As String
-    BuildDebugMatrix matrixLog
+    BuildDebugMatrix result.Slides, result.TotalSlides, matrixLog
 
     ' Phase 9: Build comprehensive summary
     Dim totalSkipped As Long, totalProcessed As Long, totalWithNotes As Long
     totalSkipped = 0
-    For slideNum = 1 To mTotalSlides
-        If mSkip(slideNum) Then totalSkipped = totalSkipped + 1
+    For slideNum = 1 To result.TotalSlides
+        If result.Slides(slideNum).Skip Then totalSkipped = totalSkipped + 1
     Next slideNum
-    totalProcessed = mTotalSlides - totalSkipped
-    totalWithNotes = mTotalSlides - emptyNotesCount
+    totalProcessed = result.TotalSlides - totalSkipped
+    totalWithNotes = result.TotalSlides - emptyNotesCount
 
     Dim reportSummary As String
     reportSummary = "==================================================" & vbCrLf
     reportSummary = reportSummary & "METRIC OVERVIEW" & vbCrLf
     reportSummary = reportSummary & "==================================================" & vbCrLf
     reportSummary = reportSummary & "TIMESTAMP: " & Now & vbCrLf
-    reportSummary = reportSummary & "TOTAL SLIDES: " & mTotalSlides & vbCrLf
+    reportSummary = reportSummary & "TOTAL SLIDES: " & result.TotalSlides & vbCrLf
     reportSummary = reportSummary & "PROCESSED (non-skipped): " & totalProcessed & vbCrLf
     reportSummary = reportSummary & "SKIPPED: " & totalSkipped & vbCrLf
     reportSummary = reportSummary & vbCrLf
@@ -614,7 +630,9 @@ End Sub
 ' PHASE SUBROUTINES (extracted from RunAllChecks)
 ' ===================================================================
 
-Private Sub AnalyseDuplicates(ByRef reportDetails As String, _
+Private Sub AnalyseDuplicates(ByRef slides() As SlideData, _
+                              ByVal totalSlides As Long, _
+                              ByRef reportDetails As String, _
                               ByRef fixableCount As Long, _
                               ByRef unfixableCount As Long)
     Dim slideNum As Long
@@ -624,13 +642,13 @@ Private Sub AnalyseDuplicates(ByRef reportDetails As String, _
     fixableCount = 0: unfixableCount = 0
 
     ' Case 1: Contiguous duplicate detection
-    Dim runStart As Long, runEnd As Long, runIdx As Long, Suffix As String, j As Long
+    Dim runStart As Long, runEnd As Long, runIdx As Long, suffix As String, j As Long
     slideNum = 1
-    Do While slideNum <= mTotalSlides
-        If mTexts(slideNum) <> "" And Not mSkip(slideNum) Then
+    Do While slideNum <= totalSlides
+        If slides(slideNum).Text <> "" And Not slides(slideNum).Skip Then
             runStart = slideNum: runEnd = slideNum
-            Do While (runEnd + 1 <= mTotalSlides)
-                If mTexts(runEnd + 1) = mTexts(runStart) And Not mSkip(runEnd + 1) Then
+            Do While (runEnd + 1 <= totalSlides)
+                If slides(runEnd + 1).Text = slides(runStart).Text And Not slides(runEnd + 1).Skip Then
                     runEnd = runEnd + 1
                 Else
                     Exit Do
@@ -641,27 +659,27 @@ Private Sub AnalyseDuplicates(ByRef reportDetails As String, _
             If totalInRun > 1 Then
                 fixableCount = fixableCount + 1
                 reportDetails = reportDetails & "-> [FIXABLE ERROR]:" & vbCrLf & _
-                                "    Detected contiguous duplicate titles on Slides " & runStart & "-" & runEnd & " matching '" & mTexts(slideNum) & "'. Suffix markers added." & vbCrLf & vbCrLf
+                                "    Detected contiguous duplicate titles on Slides " & runStart & "-" & runEnd & " matching '" & slides(slideNum).Text & "'. Suffix markers added." & vbCrLf & vbCrLf
 
                 For runIdx = runStart To runEnd
-                    Suffix = " (" & (runIdx - runStart + 1) & "/" & totalInRun & ")"
-                    mTexts(runIdx) = mTexts(runIdx) & Suffix
-                    If mIndices(runIdx) <> "" Then
-                        If Len(mTexts(runIdx)) > 0 Then
-                            mFinalTitles(runIdx) = mIndices(runIdx) & " " & mTexts(runIdx)
+                    suffix = " (" & (runIdx - runStart + 1) & "/" & totalInRun & ")"
+                    slides(runIdx).Text = slides(runIdx).Text & suffix
+                    If slides(runIdx).Index <> "" Then
+                        If Len(slides(runIdx).Text) > 0 Then
+                            slides(runIdx).FinalTitle = slides(runIdx).Index & " " & slides(runIdx).Text
                         Else
-                            mFinalTitles(runIdx) = mIndices(runIdx)
+                            slides(runIdx).FinalTitle = slides(runIdx).Index
                         End If
                     Else
-                        mFinalTitles(runIdx) = mTexts(runIdx)
+                        slides(runIdx).FinalTitle = slides(runIdx).Text
                     End If
                 Next runIdx
                 slideNum = runEnd
             Else
                 Dim foundNonContig As Boolean: foundNonContig = False
-                For j = 1 To mTotalSlides
+                For j = 1 To totalSlides
                     If j < runStart Or j > runEnd Then
-                        If mTexts(j) = mTexts(slideNum) And mTexts(slideNum) <> "" And Not mSkip(j) Then
+                        If slides(j).Text = slides(slideNum).Text And slides(slideNum).Text <> "" And Not slides(j).Skip Then
                             foundNonContig = True
                             Exit For
                         End If
@@ -672,7 +690,7 @@ Private Sub AnalyseDuplicates(ByRef reportDetails As String, _
                     Dim alreadyReported As Boolean: alreadyReported = False
                     Dim prev As Long
                     For prev = 1 To slideNum - 1
-                        If mTexts(prev) = mTexts(slideNum) And Not mSkip(prev) Then
+                        If slides(prev).Text = slides(slideNum).Text And Not slides(prev).Skip Then
                             alreadyReported = True
                             Exit For
                         End If
@@ -681,8 +699,8 @@ Private Sub AnalyseDuplicates(ByRef reportDetails As String, _
                     If Not alreadyReported Then
                         Dim allSlides As String: allSlides = ""
                         Dim slideIdx As Long
-                        For slideIdx = 1 To mTotalSlides
-                            If mTexts(slideIdx) = mTexts(slideNum) And Not mSkip(slideIdx) Then
+                        For slideIdx = 1 To totalSlides
+                            If slides(slideIdx).Text = slides(slideNum).Text And Not slides(slideIdx).Skip Then
                                 If allSlides <> "" Then allSlides = allSlides & ", "
                                 allSlides = allSlides & slideIdx
                             End If
@@ -690,7 +708,7 @@ Private Sub AnalyseDuplicates(ByRef reportDetails As String, _
 
                         unfixableCount = unfixableCount + 1
                         reportDetails = reportDetails & "-> [NON-FIXABLE ERROR]:" & vbCrLf & _
-                                        "    Slides " & allSlides & " share value '" & mTexts(slideNum) & "'." & vbCrLf & vbCrLf
+                                        "    Slides " & allSlides & " share value '" & slides(slideNum).Text & "'." & vbCrLf & vbCrLf
                     End If
                 End If
             End If
@@ -701,39 +719,35 @@ Private Sub AnalyseDuplicates(ByRef reportDetails As String, _
     ' Case 2: Conflicting numerical index detection
     Dim lastLevelNum As Long, k As Long
     slideNum = 1
-    Do While slideNum < mTotalSlides
-        If mIndices(slideNum) <> "" And mIndices(slideNum + 1) <> "" And Not mSkip(slideNum) And Not mSkip(slideNum + 1) Then
-            If mIndices(slideNum) = mIndices(slideNum + 1) Then
+    Do While slideNum < totalSlides
+        If slides(slideNum).Index <> "" And slides(slideNum + 1).Index <> "" And Not slides(slideNum).Skip And Not slides(slideNum + 1).Skip Then
+            If slides(slideNum).Index = slides(slideNum + 1).Index Then
                 fixableCount = fixableCount + 1
 
                 Dim originConflictStart As Long: originConflictStart = slideNum
                 Dim originConflictEnd As Long: originConflictEnd = slideNum + 1
-                Dim sepChar As String: sepChar = "."
-                Dim charIdx As Long
-                For charIdx = 1 To Len(mIndices(slideNum))
-                    Dim c As String: c = Mid(mIndices(slideNum), charIdx, 1)
-                    If InStr("0123456789", c) = 0 Then
-                        sepChar = c
-                        Exit For
-                    End If
-                Next charIdx
 
-                Dim levels As Variant
-                levels = Split(mIndices(slideNum), sepChar)
-                Dim baseUpperSection As String: baseUpperSection = ""
-                Dim lvlIdx As Long
-                For lvlIdx = 0 To UBound(levels) - 1
-                    baseUpperSection = baseUpperSection & levels(lvlIdx) & sepChar
-                Next lvlIdx
-                lastLevelNum = CLng(levels(UBound(levels)))
+                ' Use regex to safely extract last numeric component.
+                ' This handles mixed separators (e.g. "1.2/3") that would
+                ' crash Split + CLng on a single delimiter character.
+                Dim idxRegex As Object
+                Set idxRegex = CreateObject("VBScript.RegExp")
+                idxRegex.Pattern = "^(.*?)(\d+)$"
+                Dim idxMatch As Object
+                Set idxMatch = idxRegex.Execute(slides(slideNum).Index)
+
+                If idxMatch.Count = 0 Then GoTo SkipIndexFix
+
+                Dim baseUpperSection As String: baseUpperSection = idxMatch(0).SubMatches(0)
+                lastLevelNum = CLng(idxMatch(0).SubMatches(1))
+                Dim expectedDepth As Long: expectedDepth = CountSeparators(slides(slideNum).Index) + 1
 
                 Dim totalAffectedEnd As Long: totalAffectedEnd = slideNum + 1
                 k = slideNum + 1
-                Do While k <= mTotalSlides
-                    If mIndices(k) <> "" And Not mSkip(k) Then
-                        If Left(mIndices(k), Len(baseUpperSection)) = baseUpperSection Then
-                            Dim subLevels() As String: subLevels = Split(mIndices(k), sepChar)
-                            If UBound(subLevels) = UBound(levels) Then
+                Do While k <= totalSlides
+                    If slides(k).Index <> "" And Not slides(k).Skip Then
+                        If Left(slides(k).Index, Len(baseUpperSection)) = baseUpperSection Then
+                            If CountSeparators(slides(k).Index) + 1 = expectedDepth Then
                                 totalAffectedEnd = k
                             Else
                                 Exit Do
@@ -748,21 +762,20 @@ Private Sub AnalyseDuplicates(ByRef reportDetails As String, _
                 Loop
 
                 reportDetails = reportDetails & "-> [FIXABLE ERROR]:" & vbCrLf & _
-                                "    Detected index conflict '" & mIndices(slideNum) & "' on Slides " & originConflictStart & "-" & originConflictEnd & "." & vbCrLf & _
-                                "    Cascading Patch Impact: Shifted layouts downward using delimiter [" & sepChar & "] from Slides " & originConflictStart & " to " & totalAffectedEnd & "." & vbCrLf & vbCrLf
+                                "    Detected index conflict '" & slides(slideNum).Index & "' on Slides " & originConflictStart & "-" & originConflictEnd & "." & vbCrLf & _
+                                "    Cascading Patch Impact: Shifted layouts downward from Slides " & originConflictStart & " to " & totalAffectedEnd & "." & vbCrLf & vbCrLf
 
                 k = slideNum + 1
-                Do While k <= mTotalSlides
-                    If mIndices(k) <> "" And Not mSkip(k) Then
-                        If Left(mIndices(k), Len(baseUpperSection)) = baseUpperSection Then
-                            Dim subLevels2() As String: subLevels2 = Split(mIndices(k), sepChar)
-                            If UBound(subLevels2) = UBound(levels) Then
+                Do While k <= totalSlides
+                    If slides(k).Index <> "" And Not slides(k).Skip Then
+                        If Left(slides(k).Index, Len(baseUpperSection)) = baseUpperSection Then
+                            If CountSeparators(slides(k).Index) + 1 = expectedDepth Then
                                 lastLevelNum = lastLevelNum + 1
-                                mIndices(k) = baseUpperSection & lastLevelNum
-                                If Len(mTexts(k)) > 0 Then
-                                    mFinalTitles(k) = mIndices(k) & " " & mTexts(k)
+                                slides(k).Index = baseUpperSection & lastLevelNum
+                                If Len(slides(k).Text) > 0 Then
+                                    slides(k).FinalTitle = slides(k).Index & " " & slides(k).Text
                                 Else
-                                    mFinalTitles(k) = mIndices(k)
+                                    slides(k).FinalTitle = slides(k).Index
                                 End If
                             Else
                                 Exit Do
@@ -776,6 +789,7 @@ Private Sub AnalyseDuplicates(ByRef reportDetails As String, _
                     k = k + 1
                 Loop
                 slideNum = k - 1
+SkipIndexFix:
             End If
         End If
         slideNum = slideNum + 1
@@ -783,13 +797,14 @@ Private Sub AnalyseDuplicates(ByRef reportDetails As String, _
 End Sub
 
 Private Sub AuditNotes(ByRef origPres As Presentation, _
+                       ByVal totalSlides As Long, _
                        ByRef emptyNotesCount As Long, _
                        ByRef notesLog As String)
     Dim slideNum As Long, sld As Slide
     Dim emptyNotesSlides As String: emptyNotesSlides = ""
     emptyNotesCount = 0
 
-    For slideNum = 1 To mTotalSlides
+    For slideNum = 1 To totalSlides
         Set sld = origPres.Slides(slideNum)
         Dim notesTxt As String
         notesTxt = GetNotesText(sld)
@@ -812,7 +827,7 @@ Private Sub AuditNotes(ByRef origPres As Presentation, _
     ' Empty notes debug dump
     If emptyNotesCount > 0 Then
         notesLog = notesLog & "--- EMPTY NOTES DEBUG ---" & vbCrLf
-        For slideNum = 1 To mTotalSlides
+        For slideNum = 1 To totalSlides
             Set sld = origPres.Slides(slideNum)
             Dim notesDbgTxt As String
             notesDbgTxt = GetNotesText(sld)
@@ -854,6 +869,8 @@ Private Sub AuditNotes(ByRef origPres As Presentation, _
 End Sub
 
 Private Sub CheckTranslationGaps(ByRef origPres As Presentation, _
+                                 ByRef slides() As SlideData, _
+                                 ByVal totalSlides As Long, _
                                  ByVal pptLang As String, _
                                  ByRef shapeGapCount As Long, _
                                  ByRef notesGapCount As Long, _
@@ -865,13 +882,13 @@ Private Sub CheckTranslationGaps(ByRef origPres As Presentation, _
     visGapSlides = 0: visShapesChecked = 0
     Dim transGapLog As String: transGapLog = ""
 
-    For slideNum = 1 To mTotalSlides
+    For slideNum = 1 To totalSlides
         Set sld = origPres.Slides(slideNum)
         Dim slideGapLog As String: slideGapLog = ""
         Dim hasGap As Boolean: hasGap = False
 
         ' Visible text shape scan (non-skipped slides only)
-        If Not mSkip(slideNum) Then
+        If Not slides(slideNum).Skip Then
             Dim visGapLog As String, visSlideGaps As Long
             visGapLog = ""
             visSlideGaps = 0
@@ -885,7 +902,7 @@ Private Sub CheckTranslationGaps(ByRef origPres As Presentation, _
                         CountCharacters visText, visNW, visLatin, visNonLatin
                         If visNW >= 5 Then
                             visShapesChecked = visShapesChecked + 1
-                            If mOrigTitles(slideNum) <> "" And StrComp(visText, Trim(mOrigTitles(slideNum)), vbTextCompare) = 0 Then GoTo SkipVisShape
+                            If slides(slideNum).OrigTitle <> "" And StrComp(visText, Trim(slides(slideNum).OrigTitle), vbTextCompare) = 0 Then GoTo SkipVisShape
                             Dim visPctLatin As Double, visPctNonLatin As Double
                             visPctLatin = visLatin / visNW
                             visPctNonLatin = visNonLatin / visNW
@@ -950,7 +967,7 @@ SkipVisShape:
         End If
 
         If hasGap Then
-            transGapLog = transGapLog & "  SLIDE " & slideNum & " (Title: '" & mOrigTitles(slideNum) & "')" & vbCrLf & slideGapLog
+            transGapLog = transGapLog & "  SLIDE " & slideNum & " (Title: '" & slides(slideNum).OrigTitle & "')" & vbCrLf & slideGapLog
         End If
     Next slideNum
 
@@ -967,24 +984,26 @@ SkipVisShape:
     End If
 End Sub
 
-Private Sub BuildSkippedSummary(ByRef skippedSummary As String)
-    Dim reasonList() As String: ReDim reasonList(1 To mTotalSlides)
+Private Sub BuildSkippedSummary(ByRef slides() As SlideData, _
+                                ByVal totalSlides As Long, _
+                                ByRef skippedSummary As String)
+    Dim reasonList() As String: ReDim reasonList(1 To totalSlides)
     Dim uniqueReasonCount As Long: uniqueReasonCount = 0
     Dim s As Long, u As Long
     Dim found As Boolean
 
-    For s = 1 To mTotalSlides
-        If mSkip(s) And mSkipReason(s) <> "" Then
+    For s = 1 To totalSlides
+        If slides(s).Skip And slides(s).SkipReason <> "" Then
             found = False
             For u = 1 To uniqueReasonCount
-                If reasonList(u) = mSkipReason(s) Then
+                If reasonList(u) = slides(s).SkipReason Then
                     found = True
                     Exit For
                 End If
             Next u
             If Not found Then
                 uniqueReasonCount = uniqueReasonCount + 1
-                reasonList(uniqueReasonCount) = mSkipReason(s)
+                reasonList(uniqueReasonCount) = slides(s).SkipReason
             End If
         End If
     Next s
@@ -995,8 +1014,8 @@ Private Sub BuildSkippedSummary(ByRef skippedSummary As String)
                          "==================================================" & vbCrLf
         For u = 1 To uniqueReasonCount
             Dim nums As String: nums = ""
-            For s = 1 To mTotalSlides
-                If mSkip(s) And mSkipReason(s) = reasonList(u) Then
+            For s = 1 To totalSlides
+                If slides(s).Skip And slides(s).SkipReason = reasonList(u) Then
                     If nums <> "" Then nums = nums & ", "
                     nums = nums & s
                 End If
@@ -1007,23 +1026,25 @@ Private Sub BuildSkippedSummary(ByRef skippedSummary As String)
     End If
 End Sub
 
-Private Sub BuildDebugMatrix(ByRef matrixLog As String)
+Private Sub BuildDebugMatrix(ByRef slides() As SlideData, _
+                             ByVal totalSlides As Long, _
+                             ByRef matrixLog As String)
     Dim slideNum As Long
     matrixLog = "==================================================" & vbCrLf & _
                 "COMPREHENSIVE EXHAUSTIVE DEBUG INSPECTION MATRIX" & vbCrLf & _
                 "==================================================" & vbCrLf
-    For slideNum = 1 To mTotalSlides
+    For slideNum = 1 To totalSlides
         matrixLog = matrixLog & "SLIDE " & slideNum & ":" & vbCrLf & _
-                    "  - Checked Shapes Inventory : " & mCheckedShapes(slideNum) & vbCrLf & _
-                    "  - Evaluated Text Blocks    : " & mDiscoveredTexts(slideNum) & vbCrLf
+                    "  - Checked Shapes Inventory : " & slides(slideNum).CheckedShapes & vbCrLf & _
+                    "  - Evaluated Text Blocks    : " & slides(slideNum).DiscoveredTexts & vbCrLf
 
-        If mSkip(slideNum) Then
-            matrixLog = matrixLog & "  - SELECTION RESULT         : [SKIPPED - " & mSkipReason(slideNum) & "]" & vbCrLf
+        If slides(slideNum).Skip Then
+            matrixLog = matrixLog & "  - SELECTION RESULT         : [SKIPPED - " & slides(slideNum).SkipReason & "]" & vbCrLf
         Else
-            matrixLog = matrixLog & "  - TIE-BREAKER WINNER SHAPE : [" & mShapeNames(slideNum) & "]" & vbCrLf & _
+            matrixLog = matrixLog & "  - TIE-BREAKER WINNER SHAPE : [" & slides(slideNum).ShapeName & "]" & vbCrLf & _
                         "  - FINAL SELECTION RESULT   : " & vbCrLf & _
-                        "      * Scanned Ingestion -> '" & mOrigTitles(slideNum) & "'" & vbCrLf & _
-                        "      * Committed Final   -> '" & mFinalTitles(slideNum) & "'" & vbCrLf
+                        "      * Scanned Ingestion -> '" & slides(slideNum).OrigTitle & "'" & vbCrLf & _
+                        "      * Committed Final   -> '" & slides(slideNum).FinalTitle & "'" & vbCrLf
         End If
         matrixLog = matrixLog & "--------------------------------------------------" & vbCrLf
     Next slideNum
@@ -1043,23 +1064,26 @@ End Sub
 ' (so the caller knows to re-run AnalyseDuplicates for accurate counts).
 ' ===================================================================
 
-Private Function ProcessFixableChanges(ByRef origPres As Presentation) As Boolean
+Private Function ProcessFixableChanges(ByRef origPres As Presentation, _
+                                       ByRef slides() As SlideData, _
+                                       ByRef backupSlides() As SlideData, _
+                                       ByVal totalSlides As Long) As Boolean
     Dim slideNum As Long
     Dim groupStart() As Long, groupEnd() As Long
     Dim groupCount As Long
     Dim i As Long, g As Long, s As Long
 
-    ' Build groups of consecutive slides where mFinalTitles differs
-    ReDim groupStart(1 To mTotalSlides)
-    ReDim groupEnd(1 To mTotalSlides)
+    ' Build groups of consecutive slides where FinalTitle differs from OrigTitle
+    ReDim groupStart(1 To totalSlides)
+    ReDim groupEnd(1 To totalSlides)
     groupCount = 0
 
     slideNum = 1
-    Do While slideNum <= mTotalSlides
-        If Not mSkip(slideNum) And mFinalTitles(slideNum) <> mOrigTitles(slideNum) Then
+    Do While slideNum <= totalSlides
+        If Not slides(slideNum).Skip And slides(slideNum).FinalTitle <> slides(slideNum).OrigTitle Then
             groupCount = groupCount + 1
             groupStart(groupCount) = slideNum
-            Do While slideNum <= mTotalSlides And Not mSkip(slideNum) And mFinalTitles(slideNum) <> mOrigTitles(slideNum)
+            Do While slideNum <= totalSlides And Not slides(slideNum).Skip And slides(slideNum).FinalTitle <> slides(slideNum).OrigTitle
                 slideNum = slideNum + 1
             Loop
             groupEnd(groupCount) = slideNum - 1
@@ -1095,7 +1119,7 @@ Private Function ProcessFixableChanges(ByRef origPres As Presentation) As Boolea
         Dim endS As Long: endS = groupEnd(g)
         Dim groupSize As Long: groupSize = endS - startS + 1
 
-        ' Build prompt for this group
+        ' Build prompt for this group — cap at ~900 chars to avoid MsgBox overflow
         Dim prompt As String
         If groupSize = 1 Then
             prompt = "Slide " & startS & ":" & vbCrLf & vbCrLf
@@ -1103,9 +1127,15 @@ Private Function ProcessFixableChanges(ByRef origPres As Presentation) As Boolea
             prompt = "Slides " & startS & "-" & endS & " (" & groupSize & " slides):" & vbCrLf & vbCrLf
         End If
 
+        Dim shownCount As Long: shownCount = 0
         For s = startS To endS
-            prompt = prompt & "  Slide " & s & ": '" & mOrigTitles(s) & "'" & vbCrLf
-            prompt = prompt & "         → '" & mFinalTitles(s) & "'" & vbCrLf
+            If Len(prompt) > 900 Then
+                prompt = prompt & "  ... and " & (groupSize - shownCount) & " more change(s)" & vbCrLf
+                Exit For
+            End If
+            prompt = prompt & "  Slide " & s & ": '" & slides(s).OrigTitle & "'" & vbCrLf
+            prompt = prompt & "         -> '" & slides(s).FinalTitle & "'" & vbCrLf
+            shownCount = shownCount + 1
         Next s
 
         prompt = prompt & vbCrLf & "Apply these " & groupSize & " change(s)?"
@@ -1118,9 +1148,7 @@ Private Function ProcessFixableChanges(ByRef origPres As Presentation) As Boolea
             ' Revert all remaining groups (including current)
             For i = g To groupCount
                 For s = groupStart(i) To groupEnd(i)
-                    mIndices(s) = mBackupIndices(s)
-                    mTexts(s) = mBackupTexts(s)
-                    mFinalTitles(s) = mBackupFinalTitles(s)
+                    slides(s) = backupSlides(s)
                 Next s
                 skippedCount = skippedCount + (groupEnd(i) - groupStart(i) + 1)
             Next i
@@ -1131,20 +1159,21 @@ Private Function ProcessFixableChanges(ByRef origPres As Presentation) As Boolea
             ' Apply every slide in this group
             For s = startS To endS
                 Set sld = origPres.Slides(s)
-                If mShapeNames(s) <> "" Then
+                If slides(s).ShapeName <> "" Then
                     Set objShape = Nothing
                     On Error Resume Next
-                    Set objShape = sld.Shapes(mShapeNames(s))
+                    Set objShape = sld.Shapes(slides(s).ShapeName)
                     On Error GoTo 0
 
                     If Not objShape Is Nothing Then
                         If objShape.HasTextFrame And objShape.TextFrame.HasText Then
                             Dim textToAssign As String
-                            textToAssign = mFinalTitles(s)
+                            textToAssign = slides(s).FinalTitle
 
-                            If mMatchLength(s) <= objShape.TextFrame.TextRange.Length Then
-                                If mMatchLength(s) > 0 Then
-                                    objShape.TextFrame.TextRange.Characters(1, mMatchLength(s)).Text = textToAssign
+                            On Error Resume Next
+                            If slides(s).MatchLength <= objShape.TextFrame.TextRange.Length Then
+                                If slides(s).MatchLength > 0 Then
+                                    objShape.TextFrame.TextRange.Characters(1, slides(s).MatchLength).Text = textToAssign
                                 Else
                                     objShape.TextFrame.TextRange.Text = textToAssign
                                 End If
@@ -1152,7 +1181,12 @@ Private Function ProcessFixableChanges(ByRef origPres As Presentation) As Boolea
                                 objShape.TextFrame.TextRange.Text = textToAssign
                             End If
 
-                            appliedCount = appliedCount + 1
+                            If Err.Number = 0 Then
+                                appliedCount = appliedCount + 1
+                            Else
+                                Err.Clear
+                            End If
+                            On Error GoTo 0
                         End If
                     End If
                 End If
@@ -1160,9 +1194,7 @@ Private Function ProcessFixableChanges(ByRef origPres As Presentation) As Boolea
 
         Else ' vbNo — reject the whole group, revert arrays to backup
             For s = startS To endS
-                mIndices(s) = mBackupIndices(s)
-                mTexts(s) = mBackupTexts(s)
-                mFinalTitles(s) = mBackupFinalTitles(s)
+                slides(s) = backupSlides(s)
             Next s
             anyReverted = True
             skippedCount = skippedCount + groupSize
@@ -1171,10 +1203,19 @@ Private Function ProcessFixableChanges(ByRef origPres As Presentation) As Boolea
 
     ' Save if any changes were applied
     If appliedCount > 0 Then
+        On Error Resume Next
         origPres.Save
-        MsgBox "Applied " & appliedCount & " change(s)." & vbCrLf & _
-               "Skipped: " & skippedCount & "." & vbCrLf & vbCrLf & _
-               "Presentation has been saved.", vbInformation, "Changes Applied"
+        If Err.Number <> 0 Then
+            MsgBox "Applied " & appliedCount & " change(s), but failed to save:" & vbCrLf & _
+                   Err.Description & vbCrLf & vbCrLf & _
+                   "Save the presentation manually.", vbExclamation, "Save Failed"
+            Err.Clear
+        Else
+            MsgBox "Applied " & appliedCount & " change(s)." & vbCrLf & _
+                   "Skipped: " & skippedCount & "." & vbCrLf & vbCrLf & _
+                   "Presentation has been saved.", vbInformation, "Changes Applied"
+        End If
+        On Error GoTo 0
     Else
         MsgBox "No changes were applied.", vbInformation, "No Changes"
     End If
@@ -1198,6 +1239,7 @@ Private Sub FlattenPresentation()
     Dim imgPath As String
     Dim FSO As Object
     Dim slideNum As Long, i As Long
+    Dim result As AnalysisResult
 
     On Error GoTo ErrorHandler
 
@@ -1208,13 +1250,22 @@ Private Sub FlattenPresentation()
         MsgBox "Please save your original presentation before running this script.", vbCritical, "Save Required"
         Exit Sub
     End If
+    If origPres.Slides.Count = 0 Then
+        MsgBox "Presentation has no slides.", vbExclamation, "Nothing to Flatten"
+        Exit Sub
+    End If
 
     ' Extract titles (captureDebug = False — no debug arrays needed)
-    PopulateTitleArrays origPres, captureDebug:=False
+    result = PopulateTitleArrays(origPres, captureDebug:=False)
 
     ' Initialize paths
     origPath = origPres.Path & "\"
-    origName = Left(origPres.Name, InStrRev(origPres.Name, ".") - 1)
+    Dim dotPos As Long: dotPos = InStrRev(origPres.Name, ".")
+    If dotPos > 1 Then
+        origName = Left(origPres.Name, dotPos - 1)
+    Else
+        origName = origPres.Name
+    End If
     tempFolder = origPath & "PPT_Temp_Images_Internal\"
     newPresPath = origPath & origName & "_Flattened.pptx"
 
@@ -1230,8 +1281,22 @@ Private Sub FlattenPresentation()
 
     For Each sld In origPres.Slides
         imgPath = tempFolder & "Slide_" & sld.SlideIndex & ".png"
-        sld.Export imgPath, "PNG", mSldWidth * 2, mSldHeight * 2
+        sld.Export imgPath, "PNG", result.SlideWidth * 2, result.SlideHeight * 2
     Next sld
+
+    ' Warn if flattened copy already exists (will be overwritten)
+    If FSO.FileExists(newPresPath) Then
+        If MsgBox("A previous flattened copy already exists:" & vbCrLf & vbCrLf & _
+                  newPresPath & vbCrLf & vbCrLf & _
+                  "It will be overwritten. Continue?", _
+                  vbYesNo + vbExclamation, "Overwrite Existing File") = vbNo Then
+            ' Clean up exported images and exit
+            On Error Resume Next
+            FSO.DeleteFolder Left(tempFolder, Len(tempFolder) - 1), True
+            On Error GoTo ErrorHandler
+            Exit Sub
+        End If
+    End If
 
     origPres.SaveCopyAs newPresPath
     Set newPres = pptApp.Presentations.Open(newPresPath, WithWindow:=msoTrue)
@@ -1243,20 +1308,20 @@ Private Sub FlattenPresentation()
     For Each sld In newPres.Slides
         slideNum = sld.SlideIndex
 
-        If mSkip(slideNum) Then GoTo SkipFlattenSlide
+        If result.Slides(slideNum).Skip Then GoTo SkipFlattenSlide
 
         ' Dynamic text modifications pass on parent tracking shapes
-        If mFinalTitles(slideNum) <> "" Then
+        If result.Slides(slideNum).FinalTitle <> "" Then
             Dim normalizedOriginal As String, normalizedFinal As String
-            normalizedOriginal = Replace(mOrigTitles(slideNum), " ", "")
-            normalizedFinal = Replace(mFinalTitles(slideNum), " ", "")
+            normalizedOriginal = Replace(result.Slides(slideNum).OrigTitle, " ", "")
+            normalizedFinal = Replace(result.Slides(slideNum).FinalTitle, " ", "")
 
             If normalizedOriginal <> normalizedFinal Then
-                If mShapeNames(slideNum) <> "" Then
+                If result.Slides(slideNum).ShapeName <> "" Then
                     Dim objShape As Shape
                     Set objShape = Nothing
                     On Error Resume Next
-                    Set objShape = sld.Shapes(mShapeNames(slideNum))
+                    Set objShape = sld.Shapes(result.Slides(slideNum).ShapeName)
                     If Not objShape Is Nothing Then
                         If objShape.HasTextFrame Then
                             Dim leftAnchorPos As Single
@@ -1268,10 +1333,10 @@ Private Sub FlattenPresentation()
                             objShape.TextFrame.WordWrap = msoFalse
                             objShape.TextFrame.AutoSize = msoAutoSizeShapeToFitText
 
-                            Dim textToAssign As String: textToAssign = mFinalTitles(slideNum)
-                            If mMatchLength(slideNum) <= objShape.TextFrame.TextRange.Length Then
-                                If mMatchLength(slideNum) > 0 Then
-                                    objShape.TextFrame.TextRange.Characters(1, mMatchLength(slideNum)).Text = textToAssign
+                            Dim textToAssign As String: textToAssign = result.Slides(slideNum).FinalTitle
+                            If result.Slides(slideNum).MatchLength <= objShape.TextFrame.TextRange.Length Then
+                                If result.Slides(slideNum).MatchLength > 0 Then
+                                    objShape.TextFrame.TextRange.Characters(1, result.Slides(slideNum).MatchLength).Text = textToAssign
                                 Else
                                     objShape.TextFrame.TextRange.Text = textToAssign
                                 End If
@@ -1301,8 +1366,8 @@ Private Sub FlattenPresentation()
                                             SaveWithDocument:=msoTrue, _
                                             Left:=0, _
                                             Top:=0, _
-                                            Width:=mSldWidth, _
-                                            Height:=mSldHeight)
+                                            Width:=result.SlideWidth, _
+                                            Height:=result.SlideHeight)
 
             With shp
                 .LockAspectRatio = msoFalse
@@ -1314,36 +1379,43 @@ Private Sub FlattenPresentation()
                 On Error GoTo ErrorHandler
                 .Left = 0
                 .Top = 0
-                .Width = mSldWidth
-                .Height = mSldHeight
+                .Width = result.SlideWidth
+                .Height = result.SlideHeight
             End With
 
             ' Structural Native Title Placeholder Injection
-            If mFinalTitles(slideNum) <> "" And mSkip(slideNum) = False Then
+            ' Wrapped in On Error Resume Next so a single bad slide
+            ' does not roll back the entire flatten.
+            If result.Slides(slideNum).FinalTitle <> "" And result.Slides(slideNum).Skip = False Then
+                On Error Resume Next
                 sld.Layout = ppLayoutTitleOnly
                 Dim oTargetTitlePlaceholder As Shape
                 Set oTargetTitlePlaceholder = sld.Shapes.Title
 
-                With oTargetTitlePlaceholder
-                    .Name = mFinalTitles(slideNum)
-                    With .TextFrame.TextRange
-                        .Text = mFinalTitles(slideNum)
-                        .Font.Size = 1
-                        .Font.Color.RGB = RGB(255, 255, 255)
+                If Err.Number = 0 And Not oTargetTitlePlaceholder Is Nothing Then
+                    With oTargetTitlePlaceholder
+                        .Name = result.Slides(slideNum).FinalTitle
+                        With .TextFrame.TextRange
+                            .Text = result.Slides(slideNum).FinalTitle
+                            .Font.Size = 1
+                            .Font.Color.RGB = RGB(255, 255, 255)
+                        End With
+                        .Fill.Transparency = 1#
+                        .Line.Transparency = 1#
+                        .ZOrder msoSendToBack
                     End With
-                    .Fill.Transparency = 1#
-                    .Line.Transparency = 1#
-                    .ZOrder msoSendToBack
-                End With
+                End If
+                Err.Clear
+                On Error GoTo ErrorHandler
             End If
         End If
 
         ' Commit explicit programmatic slide name references with collision guardrail
-        If mFinalTitles(slideNum) <> "" And mSkip(slideNum) = False Then
+        If result.Slides(slideNum).FinalTitle <> "" And result.Slides(slideNum).Skip = False Then
             Dim uniqueSlideName As String, testSlide As Slide
             Dim nameCollisionCounter As Long
 
-            uniqueSlideName = mFinalTitles(slideNum)
+            uniqueSlideName = result.Slides(slideNum).FinalTitle
             nameCollisionCounter = 1
 
             Do
@@ -1356,9 +1428,12 @@ Private Sub FlattenPresentation()
                     Exit Do
                 ElseIf testSlide.SlideIndex = sld.SlideIndex Then
                     Exit Do
+                ElseIf nameCollisionCounter >= 999 Then
+                    ' Safety limit — avoid infinite loop
+                    Exit Do
                 Else
                     nameCollisionCounter = nameCollisionCounter + 1
-                    uniqueSlideName = mFinalTitles(slideNum) & "_" & nameCollisionCounter
+                    uniqueSlideName = result.Slides(slideNum).FinalTitle & "_" & nameCollisionCounter
                 End If
             Loop
 
@@ -1392,10 +1467,10 @@ SkipFlattenSlide:
 
     Dim skippedSlidesLog As String: skippedSlidesLog = ""
     Dim skippedTotal As Long: skippedTotal = 0
-    For slideNum = 1 To mTotalSlides
-        If mSkip(slideNum) Then
+    For slideNum = 1 To result.TotalSlides
+        If result.Slides(slideNum).Skip Then
             skippedTotal = skippedTotal + 1
-            skippedSlidesLog = skippedSlidesLog & "  Slide " & slideNum & " [" & mSkipReason(slideNum) & "]" & vbCrLf
+            skippedSlidesLog = skippedSlidesLog & "  Slide " & slideNum & " [" & result.Slides(slideNum).SkipReason & "]" & vbCrLf
         End If
     Next slideNum
 
@@ -1404,8 +1479,8 @@ SkipFlattenSlide:
                "FLATTEN REPORT" & vbCrLf & _
                "==================================================" & vbCrLf & _
                "TIMESTAMP: " & Now & vbCrLf & _
-               "TOTAL SLIDES: " & mTotalSlides & vbCrLf & _
-               "FLATTENED: " & (mTotalSlides - skippedTotal) & vbCrLf & _
+               "TOTAL SLIDES: " & result.TotalSlides & vbCrLf & _
+               "FLATTENED: " & (result.TotalSlides - skippedTotal) & vbCrLf & _
                "SKIPPED: " & skippedTotal & vbCrLf & _
                "==================================================" & vbCrLf & vbCrLf
     If skippedTotal > 0 Then
@@ -1414,7 +1489,7 @@ SkipFlattenSlide:
 
     WriteLog briefLog, origPath
 
-    MsgBox "Flattening complete. " & (mTotalSlides - skippedTotal) & " slides flattened.", vbInformation, "Process Complete"
+    MsgBox "Flattening complete. " & (result.TotalSlides - skippedTotal) & " slides flattened.", vbInformation, "Process Complete"
     Exit Sub
 
 ErrorHandler:
