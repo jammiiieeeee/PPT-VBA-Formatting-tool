@@ -540,10 +540,11 @@ Private Sub RunAllChecks()
 
     ' Phase 2: Error analysis — backup before AnalyseDuplicates modifies slides
     Dim reportDetails As String, fixableCount As Long, unfixableCount As Long
+    Dim fixableSlides As String, nonFixableSlides As String
     Dim backupSlides() As SlideData
     backupSlides = CopySlideData(result.Slides)
 
-    AnalyseDuplicates result.Slides, result.TotalSlides, reportDetails, fixableCount, unfixableCount
+    AnalyseDuplicates result.Slides, result.TotalSlides, reportDetails, fixableCount, unfixableCount, fixableSlides, nonFixableSlides
 
     ' Phase 3: Prompt user to apply fixable changes (grouped by consecutive runs)
     ' Returns True if any slides were reverted (arrays rolled back to backup).
@@ -552,16 +553,16 @@ Private Sub RunAllChecks()
 
     ' Phase 4: Re-run analysis if slides were reverted so the log reflects
     ' the true remaining state (unfixed issues get fresh suffix/renumbering).
-    If anyReverted Then
+If anyReverted Then
         reportDetails = ""
         fixableCount = 0
         unfixableCount = 0
-        AnalyseDuplicates result.Slides, result.TotalSlides, reportDetails, fixableCount, unfixableCount
+        AnalyseDuplicates result.Slides, result.TotalSlides, reportDetails, fixableCount, unfixableCount, fixableSlides, nonFixableSlides
     End If
 
     ' Phase 5: Notes audit
-    Dim emptyNotesCount As Long, notesLog As String
-    AuditNotes origPres, result.TotalSlides, emptyNotesCount, notesLog
+    Dim emptyNotesCount As Long, emptyNotesSlides As String, notesLog As String
+    AuditNotes origPres, result.TotalSlides, emptyNotesCount, emptyNotesSlides, notesLog
 
     ' Phase 6: Translation gap check
     Dim shapeGapCount As Long, notesGapCount As Long, visGapSlides As Long
@@ -625,27 +626,42 @@ Private Sub RunAllChecks()
     reportSummary = reportSummary & vbCrLf
     reportSummary = reportSummary & "==================================================" & vbCrLf & vbCrLf
 
-    ' Phase 10: Build next-step guidance
+    ' Build NEXT STEPS with slide numbers per problem type — placed at top
     Dim nextSteps As String
     nextSteps = "NEXT STEPS" & vbCrLf
     Dim hasIssues As Boolean: hasIssues = False
     If fixableCount > 0 Or unfixableCount > 0 Or emptyNotesCount > 0 Or shapeGapCount > 0 Or notesGapCount > 0 Then hasIssues = True
     If hasIssues Then
-        If fixableCount > 0 Then nextSteps = nextSteps & "  * " & fixableCount & " contiguous duplicate title(s) — will be auto-suffixed during flatten" & vbCrLf
-        If unfixableCount > 0 Then nextSteps = nextSteps & "  * " & unfixableCount & " non-contiguous duplicate title(s) — rename slides manually before flattening" & vbCrLf
-        If emptyNotesCount > 0 Then nextSteps = nextSteps & "  * " & emptyNotesCount & " slide(s) with empty notes — review and add speaker notes as needed" & vbCrLf
-        If shapeGapCount > 0 Then nextSteps = nextSteps & "  * " & shapeGapCount & " shape text translation gap(s) — check shapes flagged in TRANSLATION GAP CHECK" & vbCrLf
-        If notesGapCount > 0 Then nextSteps = nextSteps & "  * " & notesGapCount & " notes translation gap(s) — review notes flagged in TRANSLATION GAP CHECK" & vbCrLf
+        If fixableCount > 0 Then
+            nextSteps = nextSteps & "  [FIXABLE] " & fixableCount & " contiguous duplicate title run(s) — slides: " & fixableSlides & vbCrLf
+            nextSteps = nextSteps & "    → Will be auto-suffixed during flatten (e.g., \"Title (1/3)\", \"Title (2/3)\", \"Title (3/3)\")" & vbCrLf
+        End If
+        If unfixableCount > 0 Then
+            nextSteps = nextSteps & "  [NON-FIXABLE] " & unfixableCount & " non-contiguous duplicate title(s) — slides: " & nonFixableSlides & vbCrLf
+            nextSteps = nextSteps & "    → Rename manually before flattening (same title on non-adjacent slides)" & vbCrLf
+        End If
+        If emptyNotesCount > 0 Then
+            nextSteps = nextSteps & "  [EMPTY NOTES] " & emptyNotesCount & " slide(s) — slides: " & emptyNotesSlides & vbCrLf
+            nextSteps = nextSteps & "    → Add speaker notes before flattening" & vbCrLf
+        End If
+        If shapeGapCount > 0 Then
+            nextSteps = nextSteps & "  [SHAPE TRANSLATION GAP] " & shapeGapCount & " shape(s) — slides: " & transGapShapeSlides & vbCrLf
+            nextSteps = nextSteps & "    → Shape text language mismatches presentation language" & vbCrLf
+        End If
+        If notesGapCount > 0 Then
+            nextSteps = nextSteps & "  [NOTES TRANSLATION GAP] " & notesGapCount & " slide(s) — slides: " & transGapNoteSlides & vbCrLf
+            nextSteps = nextSteps & "    → Notes language mismatches presentation language" & vbCrLf
+        End If
         nextSteps = nextSteps & vbCrLf & "  After fixing, re-run PPTTools_CheckSlides to verify, then run PPTTools_Flatten."
     Else
         nextSteps = nextSteps & "  No issues found. Ready to run PPTTools_Flatten."
     End If
     nextSteps = nextSteps & vbCrLf & vbCrLf
-    nextSteps = nextSteps & "--- END OF REPORT ---" & vbCrLf
+    nextSteps = nextSteps & "==================================================" & vbCrLf & vbCrLf
 
-    ' Phase 11: Write report (post-fix state)
+    ' Phase 11: Write report (post-fix state) — NEXT STEPS at top, then details
     Dim fullReport As String
-    fullReport = reportSummary & reportDetails & notesLog & transSummary & skippedSummary & matrixLog & nextSteps
+    fullReport = reportSummary & nextSteps & reportDetails & notesLog & transSummary & skippedSummary & matrixLog
     Dim logPath As String
     logPath = WriteLog(fullReport, origPres.Path)
 
@@ -671,10 +687,13 @@ Private Sub AnalyseDuplicates(ByRef slides() As SlideData, _
                               ByVal totalSlides As Long, _
                               ByRef reportDetails As String, _
                               ByRef fixableCount As Long, _
-                              ByRef unfixableCount As Long)
+                              ByRef unfixableCount As Long, _
+                              ByRef fixableSlides As String, _
+                              ByRef nonFixableSlides As String)
     Dim slideNum As Long
     reportDetails = ""
     fixableCount = 0: unfixableCount = 0
+    fixableSlides = "": nonFixableSlides = ""
 
     ' Case 1: Contiguous duplicate detection
     Dim runStart As Long, runEnd As Long, runIdx As Long, suffix As String, j As Long
@@ -693,6 +712,14 @@ Private Sub AnalyseDuplicates(ByRef slides() As SlideData, _
             Dim totalInRun As Long: totalInRun = (runEnd - runStart) + 1
             If totalInRun > 1 Then
                 fixableCount = fixableCount + 1
+                ' Track fixable slide numbers
+                Dim fs As String: fs = ""
+                For runIdx = runStart To runEnd
+                    If fs <> "" Then fs = fs & ", "
+                    fs = fs & runIdx
+                Next runIdx
+                If fixableSlides <> "" Then fixableSlides = fixableSlides & ", "
+                fixableSlides = fixableSlides & fs
                 If DEBUG_MODE Then
                     reportDetails = reportDetails & "-> [FIXABLE]:" & vbCrLf & _
                                     "    Contiguous duplicate titles on Slides " & runStart & "-" & runEnd & " matching '" & slides(slideNum).Text & "'. Suffix markers added." & vbCrLf & vbCrLf
@@ -744,6 +771,9 @@ Private Sub AnalyseDuplicates(ByRef slides() As SlideData, _
                         Next slideIdx
 
                         unfixableCount = unfixableCount + 1
+                        ' Track non-fixable slide numbers
+                        If nonFixableSlides <> "" Then nonFixableSlides = nonFixableSlides & ", "
+                        nonFixableSlides = nonFixableSlides & allSlides
                         If DEBUG_MODE Then
                             reportDetails = reportDetails & "-> [NON-FIXABLE]:" & vbCrLf & _
                                             "    Slides " & allSlides & " share value '" & slides(slideNum).Text & "'." & vbCrLf & vbCrLf
@@ -800,6 +830,14 @@ Private Sub AnalyseDuplicates(ByRef slides() As SlideData, _
                     k = k + 1
                 Loop
 
+                ' Track fixable slide numbers (Case 2: index conflict)
+                Dim fs2 As String: fs2 = ""
+                For k = originConflictStart To totalAffectedEnd
+                    If fs2 <> "" Then fs2 = fs2 & ", "
+                    fs2 = fs2 & k
+                Next k
+                If fixableSlides <> "" Then fixableSlides = fixableSlides & ", "
+                fixableSlides = fixableSlides & fs2
                 If DEBUG_MODE Then
                     reportDetails = reportDetails & "-> [FIXABLE]:" & vbCrLf & _
                                     "    Index conflict '" & slides(slideNum).Index & "' on Slides " & originConflictStart & "-" & originConflictEnd & "." & vbCrLf & _
@@ -840,9 +878,10 @@ End Sub
 Private Sub AuditNotes(ByRef origPres As Presentation, _
                        ByVal totalSlides As Long, _
                        ByRef emptyNotesCount As Long, _
+                       ByRef emptyNotesSlides As String, _
                        ByRef notesLog As String)
     Dim slideNum As Long, sld As Slide
-    Dim emptyNotesSlides As String: emptyNotesSlides = ""
+    emptyNotesSlides = ""
     emptyNotesCount = 0
 
     For slideNum = 1 To totalSlides
