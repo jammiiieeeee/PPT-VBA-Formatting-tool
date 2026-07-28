@@ -634,7 +634,7 @@ If anyReverted Then
     If hasIssues Then
         If fixableCount > 0 Then
             nextSteps = nextSteps & "  [FIXABLE] " & fixableCount & " contiguous duplicate title run(s) — slides: " & fixableSlides & vbCrLf
-            nextSteps = nextSteps & "    → Will be auto-suffixed during flatten (e.g., \"Title (1/3)\", \"Title (2/3)\", \"Title (3/3)\")" & vbCrLf
+            nextSteps = nextSteps & "    → Will be auto-suffixed during flatten (e.g., ""Title (1/3)"", ""Title (2/3)"", ""Title (3/3)"")" & vbCrLf
         End If
         If unfixableCount > 0 Then
             nextSteps = nextSteps & "  [NON-FIXABLE] " & unfixableCount & " non-contiguous duplicate title(s) — slides: " & nonFixableSlides & vbCrLf
